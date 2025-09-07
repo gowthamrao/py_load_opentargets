@@ -51,7 +51,7 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def update_metadata(self, version: str, dataset: str, success: bool, row_count: int) -> None:
+    def update_metadata(self, version: str, dataset: str, success: bool, row_count: int, error_message: str | None = None) -> None:
         """
         Record the outcome of a load operation in a metadata table.
 
@@ -59,6 +59,7 @@ class DatabaseLoader(abc.ABC):
         :param dataset: The name of the dataset loaded.
         :param success: Boolean indicating if the load was successful.
         :param row_count: The number of rows loaded.
+        :param error_message: An optional error message if the load failed.
         """
         raise NotImplementedError
 

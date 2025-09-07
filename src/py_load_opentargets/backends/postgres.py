@@ -149,8 +149,137 @@ class PostgresLoader(DatabaseLoader):
         self.cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name};")
         self.conn.commit()
 
-    def execute_merge_strategy(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:
-        raise NotImplementedError("Merge strategy is not yet implemented.")
+    def _ensure_metadata_table_exists(self) -> None:
+        """Checks for and creates the metadata table if it doesn't exist."""
+        table_name = "_ot_load_metadata"
+        logger.info(f"Checking for metadata table '{table_name}'...")
+        self.cursor.execute(
+            "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s);",
+            (table_name,)
+        )
+        if self.cursor.fetchone()[0]:
+            logger.info(f"Metadata table '{table_name}' already exists.")
+            return
 
-    def update_metadata(self, version: str, dataset: str, success: bool, row_count: int) -> None:
-        raise NotImplementedError("Metadata update is not yet implemented.")
+        logger.info(f"Metadata table '{table_name}' not found, creating it...")
+        create_sql = f"""
+        CREATE TABLE {table_name} (
+            id SERIAL PRIMARY KEY,
+            load_timestamp TIMESTAMPTZ DEFAULT NOW(),
+            opentargets_version TEXT NOT NULL,
+            dataset_name TEXT NOT NULL,
+            rows_loaded BIGINT,
+            status TEXT NOT NULL,
+            error_message TEXT
+        );
+        """
+        self.cursor.execute(create_sql)
+        self.conn.commit()
+        logger.info(f"Successfully created metadata table '{table_name}'.")
+
+    def get_last_successful_version(self, dataset: str) -> str | None:
+        """
+        Retrieves the version string of the last successful load for a given dataset.
+
+        :param dataset: The name of the dataset.
+        :return: The version string or None if no successful load is found.
+        """
+        self._ensure_metadata_table_exists()
+        self.cursor.execute(
+            """
+            SELECT opentargets_version
+            FROM _ot_load_metadata
+            WHERE dataset_name = %s AND status = 'success'
+            ORDER BY load_timestamp DESC
+            LIMIT 1;
+            """,
+            (dataset,)
+        )
+        result = self.cursor.fetchone()
+        return result[0] if result else None
+
+    def _table_exists(self, table_name: str) -> bool:
+        """Checks if a table exists in the database."""
+        schema, table = table_name.split('.')
+        self.cursor.execute(
+            "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = %s AND table_name = %s);",
+            (schema, table)
+        )
+        return self.cursor.fetchone()[0]
+
+    def _get_table_columns(self, table_name: str) -> list[str]:
+        """Retrieves a list of column names for a given table."""
+        schema, table = table_name.split('.')
+        self.cursor.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position;",
+            (schema, table)
+        )
+        return [row[0] for row in self.cursor.fetchall()]
+
+    def execute_merge_strategy(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:
+        """
+        Merges data from the staging table to the final table using an
+        'INSERT ON CONFLICT' (UPSERT) strategy.
+
+        If the final table does not exist, it is created and the data is copied.
+        """
+        logger.info(f"Starting merge from '{staging_table}' to '{final_table}'.")
+
+        # 1. Handle initial load: if final table doesn't exist, create it and copy data
+        if not self._table_exists(final_table):
+            logger.info(f"Final table '{final_table}' does not exist. Creating and copying data...")
+            self.cursor.execute(f"CREATE TABLE {final_table} AS TABLE {staging_table};")
+            # Add primary key constraint to the new final table
+            pk_constraint_name = f"pk_{final_table.replace('.', '_')}"
+            pk_cols_str = ", ".join([f'"{k}"' for k in primary_keys])
+            self.cursor.execute(f'ALTER TABLE {final_table} ADD CONSTRAINT "{pk_constraint_name}" PRIMARY KEY ({pk_cols_str});')
+            logger.info(f"Successfully created and populated '{final_table}'.")
+            self.conn.commit()
+            return
+
+        logger.info(f"Final table '{final_table}' exists. Performing UPSERT.")
+
+        # 2. Get column lists for dynamic SQL generation
+        all_columns = self._get_table_columns(staging_table)
+        update_columns = [col for col in all_columns if col not in primary_keys]
+
+        if not update_columns:
+            logger.warning(f"No columns to update for table '{final_table}'. All columns are part of the primary key.")
+            return
+
+        # 3. Dynamically construct the 'INSERT ... ON CONFLICT' SQL
+        all_cols_str = ", ".join([f'"{c}"' for c in all_columns])
+        pk_cols_str = ", ".join([f'"{k}"' for k in primary_keys])
+        update_clause_str = ", ".join([f'"{col}" = EXCLUDED."{col}"' for col in update_columns])
+
+        merge_sql = f"""
+        INSERT INTO {final_table} ({all_cols_str})
+        SELECT {all_cols_str} FROM {staging_table}
+        ON CONFLICT ({pk_cols_str}) DO UPDATE SET
+        {update_clause_str};
+        """
+
+        logger.info("Executing UPSERT operation...")
+        logger.debug(f"Merge SQL:\n{merge_sql}")
+        self.cursor.execute(merge_sql)
+        self.conn.commit()
+        logger.info(f"Successfully merged data into '{final_table}'.")
+
+    def update_metadata(self, version: str, dataset: str, success: bool, row_count: int, error_message: str = None) -> None:
+        """
+        Record the outcome of a load operation in the metadata table.
+        """
+        self._ensure_metadata_table_exists()
+        status = "success" if success else "failure"
+        logger.info(
+            f"Updating metadata for dataset '{dataset}', version '{version}': "
+            f"status={status}, rows_loaded={row_count}"
+        )
+
+        insert_sql = """
+        INSERT INTO _ot_load_metadata
+        (opentargets_version, dataset_name, rows_loaded, status, error_message)
+        VALUES (%s, %s, %s, %s, %s);
+        """
+        self.cursor.execute(insert_sql, (version, dataset, row_count, status, error_message))
+        self.conn.commit()

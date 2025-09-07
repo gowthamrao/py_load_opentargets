@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "py-load-opentargets"
+version = "0.1.0"
+authors = [
+    { name = "Gowtham Rao", email = "rao@ohdsi.org" },
+]
+description = "A package to efficiently load Open Targets data into a relational database."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "fsspec[gcs]",
+    "pyarrow",
+    "polars",
+    "psycopg2-binary",
+    "click",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/ohdsi/py-load-opentargets" # Placeholder
+"Bug Tracker" = "https://github.com/ohdsi/py-load-opentargets/issues" # Placeholder
+
+[project.scripts]
+py-load-opentargets = "py_load_opentargets.cli:cli"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]

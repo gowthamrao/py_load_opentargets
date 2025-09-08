@@ -61,7 +61,11 @@ class TestETLOrchestrator(unittest.TestCase):
 
         # Assert
         mock_download.assert_called_once_with(
-            'gcs://fake-bucket/{version}/{dataset_name}/', '22.04', 'targets', ANY
+            'gcs://fake-bucket/{version}/{dataset_name}/',
+            '22.04',
+            'targets',
+            ANY,  # The temp path is unpredictable
+            max_workers=1
         )
         self.mock_loader.connect.assert_called_once_with("fake_db_conn_str")
         self.mock_loader.prepare_staging_table.assert_called_once()
@@ -95,6 +99,9 @@ class TestETLOrchestrator(unittest.TestCase):
         orchestrator.run()
 
         # Assert
+        mock_download.assert_called_once_with(
+            ANY, ANY, 'diseases', ANY, max_workers=ANY
+        )
         self.mock_loader.execute_merge_strategy.assert_not_called()
         self.mock_loader.update_metadata.assert_called_once_with(
             version=self.version, dataset='diseases', success=False, row_count=0, error_message="DB connection lost"

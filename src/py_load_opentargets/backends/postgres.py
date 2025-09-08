@@ -419,58 +419,29 @@ class PostgresLoader(DatabaseLoader):
 
         logger.info(f"Final table '{final_table}' exists. Performing DELETE-then-UPSERT.")
 
-        # --- Stage 1: Delete records that are in the final table but not in the staging table ---
+        # --- Stage 1: Delete records that are in the final table but not in the new staging data ---
+        # This uses a `NOT EXISTS` subquery which is highly efficient in PostgreSQL.
+        # It deletes any row from the final table if its primary key does not exist
+        # in the staging table.
+        logger.info("Identifying and deleting stale records from final table...")
+
         join_condition = sql.SQL(' AND ').join(
             sql.SQL("f.{pk} = s.{pk}").format(pk=pk) for pk in pk_idents
         )
-        # Check if the first primary key from the staging table is NULL after the LEFT JOIN
-        staging_pk_is_null = sql.SQL("s.{} IS NULL").format(pk_idents[0])
 
         delete_sql = sql.SQL("""
-            DELETE FROM {final_table} f
-            WHERE EXISTS (
-                SELECT 1
-                FROM {final_table} AS final_inner
-                LEFT JOIN {staging_table} s ON {join_condition_inner}
-                WHERE {staging_pk_is_null_inner}
-                AND f.{pk_final} = final_inner.{pk_final}
-            );
+            DELETE FROM {final_table} AS f
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {staging_table} AS s
+                WHERE {join_condition}
+            )
         """).format(
             final_table=final_table_ident,
             staging_table=staging_table_ident,
-            join_condition_inner=sql.SQL(' AND ').join(sql.SQL("final_inner.{pk} = s.{pk}").format(pk=pk) for pk in pk_idents),
-            staging_pk_is_null_inner=sql.SQL("s.{} IS NULL").format(pk_idents[0]),
-            pk_final=pk_idents[0] # Assuming single column PK for simplicity in this part of the query
+            join_condition=join_condition
         )
 
-        # A more generic way for composite keys
-        final_pk_cols = sql.SQL(',').join(sql.SQL('f.') + pk for pk in pk_idents)
-        select_final_pk_cols = sql.SQL(',').join(sql.SQL('final_inner.') + pk for pk in pk_idents)
-
-        join_condition_inner = sql.SQL(' AND ').join(
-            sql.SQL('final_inner.{pk} = s.{pk}').format(pk=pk) for pk in pk_idents
-        )
-
-        delete_sql_generic = sql.SQL("""
-            DELETE FROM {final_table} f
-            WHERE ({final_pk_cols}) IN (
-                SELECT {select_final_pk_cols}
-                FROM {final_table} AS final_inner
-                LEFT JOIN {staging_table} s ON {join_condition_inner}
-                WHERE s.{first_pk} IS NULL
-            );
-        """).format(
-            final_table=final_table_ident,
-            final_pk_cols=final_pk_cols,
-            select_final_pk_cols=select_final_pk_cols,
-            staging_table=staging_table_ident,
-            join_condition_inner=join_condition_inner,
-            first_pk=pk_idents[0]
-        )
-
-
-        logger.info("Identifying and deleting stale records...")
-        self.cursor.execute(delete_sql_generic)
+        self.cursor.execute(delete_sql)
         deleted_rows = self.cursor.rowcount
         logger.info(f"Deleted {deleted_rows} stale records from '{final_table}'.")
 

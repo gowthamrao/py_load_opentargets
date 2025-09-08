@@ -8,27 +8,23 @@ from typing import List
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Constants for data sources
-OPENTARGETS_GCS_BASE_URL = "gs://open-targets/platform/"
-OPENTARGETS_FTP_HOST = "ftp.ebi.ac.uk"
-OPENTARGETS_FTP_PATH = "/pub/databases/opentargets/platform/"
-
-
-def list_available_versions() -> List[str]:
+def list_available_versions(ftp_host: str, ftp_path: str) -> List[str]:
     """
     Lists available Open Targets release versions from the EBI FTP server.
     FTP is used for listing as GCS bucket listing can require authentication.
 
+    :param ftp_host: The FTP host (e.g., 'ftp.ebi.ac.uk').
+    :param ftp_path: The path on the FTP server to list versions from.
     :return: A list of version strings, sorted from newest to oldest.
     """
-    logger.info(f"Checking for available versions on FTP host {OPENTARGETS_FTP_HOST}...")
+    logger.info(f"Checking for available versions on FTP host {ftp_host}...")
     try:
         # Correctly instantiate the FTP filesystem with the host
-        fs = fsspec.filesystem("ftp", host=OPENTARGETS_FTP_HOST, anon=True)
+        fs = fsspec.filesystem("ftp", host=ftp_host, anon=True)
 
         version_pattern = re.compile(r"^\d{2}\.\d{2}$")
         # List contents of the specific path on the host
-        all_paths = fs.ls(OPENTARGETS_FTP_PATH, detail=False)
+        all_paths = fs.ls(ftp_path, detail=False)
 
         # fsspec returns full paths, we just need the directory name
         versions = [
@@ -49,18 +45,25 @@ def list_available_versions() -> List[str]:
         return []
 
 
-def download_dataset(version: str, dataset: str, output_dir: Path) -> Path:
+def download_dataset(gcs_base_url: str, version: str, dataset: str, output_dir: Path) -> Path:
     """
     Downloads a specific dataset for a given Open Targets version from GCS.
     GCS is preferred for downloads due to higher speed.
 
+    :param gcs_base_url: The base GCS URL for Open Targets data.
     :param version: The Open Targets version (e.g., '22.04').
     :param dataset: The name of the dataset (e.g., 'targets').
     :param output_dir: The local directory to save the downloaded files.
     :return: The path to the directory containing the downloaded dataset.
     """
-    dataset_url = f"{OPENTARGETS_GCS_BASE_URL}{version}/output/etl/parquet/{dataset}/"
-    local_path = output_dir / version / dataset
+    # In the new data schema, some dataset names are camelCase.
+    # The folder paths in GCS seem to follow this.
+    dataset_path_name = dataset
+    # Example: associationByDatasourceDirect -> associationByDatasourceDirect
+    # This is a bit of an assumption, may need refinement if paths differ.
+
+    dataset_url = f"{gcs_base_url}{version}/output/etl/parquet/{dataset_path_name}/"
+    local_path = output_dir / version / dataset_path_name
 
     logger.info(f"Downloading dataset '{dataset}' for version '{version}' from GCS...")
     logger.info(f"Source: {dataset_url}")

@@ -3,7 +3,7 @@ import hashlib
 from unittest.mock import patch, MagicMock, mock_open
 from pathlib import Path
 
-from py_load_opentargets.data_acquisition import get_checksum_manifest, download_dataset, _verify_file_checksum
+from py_load_opentargets.data_acquisition import get_checksum_manifest, download_dataset, _verify_file_checksum, _download_and_verify_one_file
 
 # --- Fixtures ---
 
@@ -172,3 +172,55 @@ def test_download_dataset_checksum_fail_raises_error(mock_url_to_fs, tmp_path):
     # Expect a ValueError to be raised
     with pytest.raises(ValueError, match="Checksum mismatch"):
         download_dataset(uri_template, version, dataset, tmp_path, checksum_manifest, max_workers=1)
+
+
+# --- Tests for the refactored helper function ---
+
+def test_download_and_verify_one_file_success(tmp_path):
+    """Tests the helper function for a successful download and verification."""
+    mock_fs = MagicMock()
+    # Create a dummy file content and its checksum
+    file_content = b"test data"
+    expected_checksum = hashlib.sha1(file_content).hexdigest()
+    checksum_manifest = {"output/etl/parquet/dataset1/file1.parquet": expected_checksum}
+
+    # Simulate the fs.get() by creating the file with the correct content
+    mock_fs.get = MagicMock()
+    def mock_get_side_effect(remote_path, local_path_str):
+        Path(local_path_str).write_bytes(file_content)
+
+    mock_fs.get.side_effect = mock_get_side_effect
+
+    result_path = _download_and_verify_one_file(
+        "remote/file1.parquet",
+        tmp_path,
+        "dataset1",
+        checksum_manifest,
+        mock_fs
+    )
+    assert result_path.exists()
+    assert result_path.name == "file1.parquet"
+    # Verify that fs.get was called
+    mock_fs.get.assert_called_once()
+
+
+def test_download_and_verify_one_file_key_error(tmp_path):
+    """Tests that a KeyError is raised if the file is not in the manifest."""
+    mock_fs = MagicMock()
+    checksum_manifest = {}  # Empty manifest, so the key will be missing
+
+    # Simulate fs.get()
+    mock_fs.get = MagicMock()
+    def mock_get_side_effect(remote_path, local_path_str):
+        Path(local_path_str).write_text("test data")
+
+    mock_fs.get.side_effect = mock_get_side_effect
+
+    with pytest.raises(KeyError, match="Checksum not found in manifest for file"):
+        _download_and_verify_one_file(
+            "remote/file1.parquet",
+            tmp_path,
+            "dataset1",
+            checksum_manifest,
+            mock_fs
+        )

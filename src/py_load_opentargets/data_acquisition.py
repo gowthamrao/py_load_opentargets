@@ -46,6 +46,11 @@ def download_dataset(uri_template: str, version: str, dataset: str, output_dir: 
     """
     Downloads a specific dataset for a given Open Targets version from a templated URI.
 
+    Note:
+        This function does not perform checksum validation (FRD R.3.1.5) because,
+        after investigation, the Open Targets FTP and GCS sources do not appear
+        to provide manifest files or checksums for their data releases.
+
     :param uri_template: The fsspec-compatible URI template.
     :param version: The Open Targets version (e.g., '22.04').
     :param dataset: The name of the dataset (e.g., 'targets').

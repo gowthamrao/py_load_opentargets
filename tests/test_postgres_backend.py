@@ -77,7 +77,7 @@ def test_generate_create_table_sql(loader):
 # These tests require a running PostgreSQL database.
 # Set the DB_CONN_STR environment variable to run them.
 import os
-import psycopg2
+import psycopg
 import pyarrow.parquet as pq
 from pathlib import Path
 

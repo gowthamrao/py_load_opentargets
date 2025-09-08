@@ -25,6 +25,7 @@ dependencies = [
     "polars",
     "psycopg2-binary",
     "click",
+    "tomli; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,9 @@ test = [
 
 [project.scripts]
 py-load-opentargets = "py_load_opentargets.cli:cli"
+
+[project.entry-points."py_load_opentargets.backends"]
+postgres = "py_load_opentargets.backends.postgres:PostgresLoader"
 
 [tool.pytest.ini_options]
 minversion = "6.0"

@@ -36,15 +36,20 @@ class TestETLOrchestrator(unittest.TestCase):
         self.staging_schema = "staging"
         self.final_schema = "public"
 
+    @patch('py_load_opentargets.orchestrator.get_checksum_manifest')
     @patch('py_load_opentargets.orchestrator.os.getenv')
     @patch('py_load_opentargets.orchestrator.download_dataset')
-    def test_run_happy_path(self, mock_download, mock_getenv):
+    def test_run_happy_path(self, mock_download, mock_getenv, mock_get_checksums):
         """Test a successful run for a single dataset."""
         # Arrange
         mock_getenv.return_value = "fake_db_conn_str"
         mock_download.return_value = Path("/fake/temp/dir/targets")
+        mock_get_checksums.return_value = {'some_file': 'some_hash'}
         self.mock_loader.get_last_successful_version.return_value = None
         self.mock_loader.table_exists.return_value = True
+
+        # Add checksum URI to config for this test
+        self.mock_config['source']['checksum_uri_template'] = 'ftp://fake/{version}/'
 
         orchestrator = ETLOrchestrator(
             config=self.mock_config,
@@ -53,18 +58,19 @@ class TestETLOrchestrator(unittest.TestCase):
             staging_schema=self.staging_schema,
             final_schema=self.final_schema
         )
-        # Patch the factory on the instance to return our mock
         orchestrator.loader_factory = self.mock_loader_factory
 
         # Act
         orchestrator.run()
 
         # Assert
+        mock_get_checksums.assert_called_once_with(self.version, 'ftp://fake/{version}/')
         mock_download.assert_called_once_with(
             'gcs://fake-bucket/{version}/{dataset_name}/',
             '22.04',
             'targets',
             ANY,  # The temp path is unpredictable
+            {'some_file': 'some_hash'}, # The checksum manifest
             max_workers=1
         )
         self.mock_loader.connect.assert_called_once_with("fake_db_conn_str")
@@ -75,13 +81,15 @@ class TestETLOrchestrator(unittest.TestCase):
         )
         self.mock_loader.cleanup.assert_called_once()
 
+    @patch('py_load_opentargets.orchestrator.get_checksum_manifest')
     @patch('py_load_opentargets.orchestrator.os.getenv')
     @patch('py_load_opentargets.orchestrator.download_dataset')
-    def test_run_error_handling(self, mock_download, mock_getenv):
+    def test_run_error_handling(self, mock_download, mock_getenv, mock_get_checksums):
         """Test that an error during bulk load is handled correctly."""
         # Arrange
         mock_getenv.return_value = "fake_db_conn_str"
         mock_download.return_value = Path("/fake/temp/dir/diseases")
+        mock_get_checksums.return_value = {}
         self.mock_loader.get_last_successful_version.return_value = None
         self.mock_loader.bulk_load_native.side_effect = Exception("DB connection lost")
 
@@ -100,7 +108,7 @@ class TestETLOrchestrator(unittest.TestCase):
 
         # Assert
         mock_download.assert_called_once_with(
-            ANY, ANY, 'diseases', ANY, max_workers=ANY
+            ANY, ANY, 'diseases', ANY, {}, max_workers=ANY
         )
         self.mock_loader.execute_merge_strategy.assert_not_called()
         self.mock_loader.update_metadata.assert_called_once_with(

@@ -36,22 +36,27 @@ def test_download_dataset_sequential_success(mock_url_to_fs, tmp_path: Path):
     """Tests the successful download of a dataset sequentially when max_workers=1."""
     mock_fs = MagicMock()
     mock_url_to_fs.return_value = (mock_fs, 'mock_remote_path')
-    # It will still glob, but then use the recursive get
     mock_fs.glob.return_value = ['mock_remote_path/file1.parquet']
 
-    uri_template = "gcs://fake-bucket/{version}/{dataset_name}/"
+    uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
     version = "22.06"
     dataset = "targets"
 
-    # When max_workers is 1, it should use the recursive get
-    result_path = download_dataset(uri_template, version, dataset, tmp_path, max_workers=1)
+    # Test with a valid manifest
+    manifest = {
+        "output/etl/parquet/targets/file1.parquet": "dummy_hash"
+    }
+    with patch('py_load_opentargets.data_acquisition._verify_file_checksum') as mock_verify:
+        result_path = download_dataset(
+            uri_template, version, dataset, tmp_path, checksum_manifest=manifest, max_workers=1
+        )
+        mock_verify.assert_called_once()
 
     expected_local_path = tmp_path / version / dataset
-    expected_remote_path = 'mock_remote_path'
-
     assert result_path == expected_local_path
     mock_fs.glob.assert_called_once_with("mock_remote_path/*.parquet")
-    mock_fs.get.assert_called_once_with(expected_remote_path, str(expected_local_path), recursive=True)
+    # It now calls get for each file, not recursively for the directory
+    mock_fs.get.assert_called_once_with('mock_remote_path/file1.parquet', str(expected_local_path / 'file1.parquet'))
 
 
 @patch('py_load_opentargets.data_acquisition.fsspec.core.url_to_fs')
@@ -67,19 +72,23 @@ def test_download_dataset_parallel_success(mock_url_to_fs, tmp_path: Path):
     ]
     mock_fs.glob.return_value = remote_files
 
-    uri_template = "gcs://fake-bucket/{version}/{dataset_name}/"
+    uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
     version = "22.06"
     dataset = "targets"
 
-    result_path = download_dataset(uri_template, version, dataset, tmp_path, max_workers=4)
+    manifest = {
+        f"output/etl/parquet/targets/{Path(f).name}": "dummy_hash" for f in remote_files
+    }
+    with patch('py_load_opentargets.data_acquisition._verify_file_checksum') as mock_verify:
+        result_path = download_dataset(
+            uri_template, version, dataset, tmp_path, checksum_manifest=manifest, max_workers=4
+        )
+        assert mock_verify.call_count == len(remote_files)
+
 
     expected_local_path = tmp_path / version / dataset
     assert result_path == expected_local_path
-
-    # Check that glob was called
     mock_fs.glob.assert_called_once_with("gcs://fake-bucket/22.06/targets/*.parquet")
-
-    # Check that `get` was called for each file individually, not recursively
     expected_calls = [
         call(remote_files[0], str(expected_local_path / 'part-001.parquet')),
         call(remote_files[1], str(expected_local_path / 'part-002.parquet')),
@@ -97,6 +106,13 @@ def test_download_dataset_failure(mock_url_to_fs, tmp_path: Path):
     mock_url_to_fs.return_value = (mock_fs, 'mock_remote_path')
     mock_fs.glob.return_value = ['gcs://fake-bucket/22.06/targets/part-001.parquet']
 
-
+    manifest = {"output/etl/parquet/targets/part-001.parquet": "hash"}
     with pytest.raises(Exception, match="GCS download failed"):
-        download_dataset("gcs://fake-bucket/{version}/{dataset_name}/", "22.06", "targets", tmp_path, max_workers=2)
+        download_dataset(
+            "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/",
+            "22.06",
+            "targets",
+            tmp_path,
+            checksum_manifest=manifest,
+            max_workers=2
+        )

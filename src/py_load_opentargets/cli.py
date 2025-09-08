@@ -49,11 +49,12 @@ def list_versions_cmd(ctx):
 @click.option('--version', help='Open Targets version to load. Defaults to the latest.')
 @click.option('--staging-schema', default='staging', show_default=True, help='Schema for staging tables.')
 @click.option('--final-schema', default='public', show_default=True, help='Schema for the final table.')
+@click.option('--max-workers', default=4, show_default=True, type=int, help='Max concurrent download workers.')
 @click.option('--skip-confirmation', is_flag=True, help='Skip confirmation prompt for loading already loaded versions.')
 @click.option('--no-continue-on-error', is_flag=True, help='Abort the process if an error occurs for any dataset.')
 @click.argument('datasets', nargs=-1)
 @click.pass_context
-def load(ctx, db_conn_str, backend, version, staging_schema, final_schema, skip_confirmation, no_continue_on_error, datasets: Tuple[str]):
+def load(ctx, db_conn_str, backend, version, staging_schema, final_schema, max_workers, skip_confirmation, no_continue_on_error, datasets: Tuple[str]):
     """
     Downloads and loads specified Open Targets datasets into a database.
 
@@ -69,6 +70,7 @@ def load(ctx, db_conn_str, backend, version, staging_schema, final_schema, skip_
     datasets_to_process = list(datasets or all_defined_datasets.keys())
     click.echo(f"--- Open Targets Universal Loader ---")
     click.echo(f"Selected datasets: {click.style(', '.join(datasets_to_process), bold=True)}")
+    click.echo(f"Parallel download workers: {max_workers}")
 
     # 2. Determine version
     if not version:
@@ -98,12 +100,16 @@ def load(ctx, db_conn_str, backend, version, staging_schema, final_schema, skip_
         # The confirmation for re-processing is now handled inside the CLI
         # before handing off to the non-interactive orchestrator.
         if not skip_confirmation:
+            # Create a mutable list to remove items from
+            datasets_to_process_mutable = list(datasets_to_process)
             for dataset_name in datasets_to_process:
                 last_successful_version = loader.get_last_successful_version(dataset_name)
                 if last_successful_version == version:
                     if not click.confirm(f"⚠️ Version '{version}' of '{dataset_name}' already loaded. Continue?"):
                         click.echo(f"Skipping dataset '{dataset_name}' as requested.")
-                        datasets_to_process.remove(dataset_name)
+                        datasets_to_process_mutable.remove(dataset_name)
+            datasets_to_process = datasets_to_process_mutable
+
 
         if not datasets_to_process:
             click.echo("No datasets left to process. Exiting.")
@@ -116,6 +122,7 @@ def load(ctx, db_conn_str, backend, version, staging_schema, final_schema, skip_
             version=version,
             staging_schema=staging_schema,
             final_schema=final_schema,
+            max_workers=max_workers,
             # The orchestrator is always non-interactive.
             skip_confirmation=True,
             continue_on_error=not no_continue_on_error

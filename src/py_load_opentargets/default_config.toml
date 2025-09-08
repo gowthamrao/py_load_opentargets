@@ -1,6 +1,16 @@
 # Default configuration for the Open Targets data loader.
 # Users can override these settings by creating their own config.toml.
 
+[execution]
+# The number of parallel threads to use for downloading and processing datasets.
+# A value of 1 means sequential processing.
+max_workers = 4
+
+[database]
+# The name of the database backend to use.
+# This must match an entry point in the 'py_load_opentargets.backends' group.
+backend = "postgres"
+
 [source]
 # fsspec-compatible URI for discovering available Open Targets versions.
 # This points to the FTP server where version directories like '22.04' are listed.

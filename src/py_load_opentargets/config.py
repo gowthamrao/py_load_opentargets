@@ -1,5 +1,6 @@
 import os
 import logging
+import collections.abc
 from typing import Dict, Any, Optional
 
 try:
@@ -13,13 +14,27 @@ logger = logging.getLogger(__name__)
 # The global config object, initialized with defaults.
 _config: Optional[Dict[str, Any]] = None
 
+
+def deep_merge(d, u):
+    """
+    Recursively merges dictionary `u` into `d`.
+    `u`'s values overwrite `d`'s values.
+    """
+    for k, v in u.items():
+        if isinstance(v, collections.abc.Mapping):
+            d[k] = deep_merge(d.get(k, {}), v)
+        else:
+            d[k] = v
+    return d
+
+
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Loads configuration from the default and user-provided TOML files.
 
     The configuration is loaded in the following order:
     1. The default configuration (`default_config.toml`) packaged with the library.
-    2. A user-provided configuration file, which overrides the defaults.
+    2. A user-provided configuration file, which recursively overrides the defaults.
 
     :param config_path: Path to a user-provided TOML configuration file.
     :return: A dictionary containing the merged configuration.
@@ -36,11 +51,8 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         try:
             with open(config_path, 'rb') as f:
                 user_config = tomllib.load(f)
-            # A simple merge: user config keys overwrite default keys.
-            # A more sophisticated deep merge could be used if needed.
-            merged_config = default_config.copy()
-            merged_config.update(user_config)
-            _config = merged_config
+            # Deep merge user config into the default config
+            _config = deep_merge(default_config, user_config)
         except FileNotFoundError:
             logger.error(f"Configuration file not found: {config_path}")
             raise

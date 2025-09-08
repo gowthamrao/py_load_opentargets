@@ -33,6 +33,7 @@ dependencies = [
 test = [
     "pytest",
     "pytest-postgresql",
+    "pytest-mock",
     "ruff",
 ]
 

@@ -109,6 +109,32 @@ def _verify_file_checksum(file_path: Path, expected_checksum: str):
     logger.debug(f"Checksum verified for {file_path}")
 
 
+def _download_and_verify_one_file(
+    remote_file: str,
+    local_path: Path,
+    dataset: str,
+    checksum_manifest: Dict[str, str],
+    fs,
+) -> Path:
+    """
+    Helper function to download a single file and verify its checksum.
+    Designed to be called by `download_dataset`.
+    """
+    local_file = local_path / Path(remote_file).name
+    fs.get(remote_file, str(local_file))
+    logger.debug(f"Successfully downloaded {remote_file}")
+
+    # Construct the key for the checksum manifest
+    manifest_key = f"output/etl/parquet/{dataset}/{Path(remote_file).name}"
+    expected_checksum = checksum_manifest.get(manifest_key)
+
+    if not expected_checksum:
+        raise KeyError(f"Checksum not found in manifest for file: {manifest_key}")
+
+    _verify_file_checksum(local_file, expected_checksum)
+    return local_file
+
+
 def download_dataset(
     uri_template: str,
     version: str,
@@ -149,30 +175,18 @@ def download_dataset(
 
         downloaded_files = []
 
-        def download_and_verify(remote_file):
-            local_file = local_path / Path(remote_file).name
-            fs.get(remote_file, str(local_file))
-            logger.debug(f"Successfully downloaded {remote_file}")
-
-            # Only perform checksum validation if a manifest is provided
-            if checksum_manifest:
-                # The manifest paths are relative to the version root, e.g.,
-                # 'output/etl/parquet/targets/part-000.parquet'
-                manifest_key = f"output/etl/parquet/{dataset}/{Path(remote_file).name}"
-                expected_checksum = checksum_manifest.get(manifest_key)
-
-                if expected_checksum:
-                    _verify_file_checksum(local_file, expected_checksum)
-                else:
-                    # If a manifest is provided, all files must be in it
-                    raise KeyError(f"Checksum not found in manifest for file: {manifest_key}")
-            return local_file
-
         if max_workers > 1:
             logger.info(f"Downloading in parallel with {max_workers} workers.")
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_file = {
-                    executor.submit(download_and_verify, remote_file): remote_file
+                    executor.submit(
+                        _download_and_verify_one_file,
+                        remote_file,
+                        local_path,
+                        dataset,
+                        checksum_manifest,
+                        fs,
+                    ): remote_file
                     for remote_file in remote_files
                 }
                 for future in as_completed(future_to_file):
@@ -185,7 +199,11 @@ def download_dataset(
         else:
             logger.info("Downloading sequentially.")
             for remote_file in remote_files:
-                downloaded_files.append(download_and_verify(remote_file))
+                downloaded_files.append(
+                    _download_and_verify_one_file(
+                        remote_file, local_path, dataset, checksum_manifest, fs
+                    )
+                )
 
         logger.info(f"Successfully downloaded and verified dataset '{dataset}' to {local_path}")
         return local_path

@@ -201,22 +201,27 @@ class ETLOrchestrator:
             logger.error("DB_CONN_STR environment variable not set.")
             raise ValueError("Database connection string is required.")
 
-        # Fetch checksum manifest before starting any downloads
+        # Fetch checksum manifest before starting any downloads. This is mandatory.
+        checksum_uri_template = source_config.get("checksum_uri_template")
+        if not checksum_uri_template:
+            logger.error(
+                "Missing 'checksum_uri_template' in source config. "
+                "This is required for data integrity validation."
+            )
+            raise ValueError("Missing 'checksum_uri_template' in source config.")
+
         try:
-            checksum_uri_template = source_config.get("checksum_uri_template")
-            if checksum_uri_template:
-                self.checksum_manifest = get_checksum_manifest(
-                    self.version, checksum_uri_template
-                )
-            else:
-                logger.warning(
-                    "No 'checksum_uri_template' found in config. Skipping checksum validation."
-                )
+            logger.info("Fetching and verifying checksum manifest...")
+            self.checksum_manifest = get_checksum_manifest(
+                self.version, checksum_uri_template
+            )
+            logger.info("Checksum manifest successfully loaded.")
         except Exception as e:
             logger.error(
-                f"Failed to retrieve checksum manifest. Halting process. Error: {e}"
+                f"Failed to retrieve or verify checksum manifest. Halting process. Error: {e}"
             )
-            return
+            # Re-raise to ensure the process stops
+            raise
 
         if max_workers > 1:
             logger.info(f"Running with up to {max_workers} parallel workers.")

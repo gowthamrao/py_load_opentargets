@@ -16,6 +16,10 @@ backend = "postgres"
 # This points to the FTP server where version directories like '22.04' are listed.
 version_discovery_uri = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/"
 
+# fsspec-compatible URI template for downloading the checksum manifest.
+# This points to the root of a specific version on the FTP server.
+checksum_uri_template = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/{version}/"
+
 # fsspec-compatible URI template for downloading dataset parquet files.
 # This uses GCS for high-speed downloads.
 # Placeholders {version} and {dataset_name} will be filled in by the application.

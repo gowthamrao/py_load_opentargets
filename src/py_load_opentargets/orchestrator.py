@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib.metadata import entry_points
 
 from .loader import DatabaseLoader
-from .data_acquisition import download_dataset
+from .data_acquisition import download_dataset, get_checksum_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +54,18 @@ class ETLOrchestrator:
         self.final_schema = final_schema
         self.skip_confirmation = skip_confirmation
         self.continue_on_error = continue_on_error
+        self.checksum_manifest = {}
 
         db_backend = self.config.get('database', {}).get('backend', 'postgres')
         self.loader_factory = get_db_loader_factory(db_backend)
 
-    def _process_dataset(self, dataset_name: str, db_conn_str: str, max_workers: int):
+    def _process_dataset(
+        self,
+        dataset_name: str,
+        db_conn_str: str,
+        max_workers: int,
+        checksum_manifest: Dict[str, str],
+    ):
         """
         Processes a single dataset. Designed to be called in a separate thread.
         It creates its own database loader and connection to ensure thread safety.
@@ -89,6 +96,7 @@ class ETLOrchestrator:
                     self.version,
                     dataset_name,
                     temp_dir,
+                    checksum_manifest,
                     max_workers=max_workers,
                 )
                 loader.prepare_staging_schema(self.staging_schema)
@@ -132,6 +140,7 @@ class ETLOrchestrator:
         logger.info("--- Starting Open Targets ETL Process ---")
         logger.info(f"Selected datasets: {', '.join(self.datasets_to_process)}")
 
+        source_config = self.config['source']
         max_workers = self.config.get('execution', {}).get('max_workers', 1)
         db_conn_str = os.getenv("DB_CONN_STR")
 
@@ -139,11 +148,28 @@ class ETLOrchestrator:
             logger.error("DB_CONN_STR environment variable not set.")
             raise ValueError("Database connection string is required.")
 
+        # Fetch checksum manifest before starting any downloads
+        try:
+            checksum_uri_template = source_config.get('checksum_uri_template')
+            if checksum_uri_template:
+                self.checksum_manifest = get_checksum_manifest(self.version, checksum_uri_template)
+            else:
+                logger.warning("No 'checksum_uri_template' found in config. Skipping checksum validation.")
+        except Exception as e:
+            logger.error(f"Failed to retrieve checksum manifest. Halting process. Error: {e}")
+            return
+
         if max_workers > 1:
             logger.info(f"Running with up to {max_workers} parallel workers.")
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_dataset = {
-                    executor.submit(self._process_dataset, name, db_conn_str, max_workers): name
+                    executor.submit(
+                        self._process_dataset,
+                        name,
+                        db_conn_str,
+                        max_workers,
+                        self.checksum_manifest,
+                    ): name
                     for name in self.datasets_to_process
                 }
                 for future in as_completed(future_to_dataset):
@@ -155,11 +181,10 @@ class ETLOrchestrator:
                         logger.error(f"Dataset '{dataset_name}' generated an unhandled exception: {e}", exc_info=True)
                         if not self.continue_on_error:
                             logger.error("Halting due to error in worker.")
-                            # The executor will be shut down automatically by the 'with' statement.
-                            return  # Exit the run method
+                            return
         else:
             logger.info("Running sequentially with a single worker.")
             for dataset in self.datasets_to_process:
-                self._process_dataset(dataset, db_conn_str, max_workers)
+                self._process_dataset(dataset, db_conn_str, max_workers, self.checksum_manifest)
 
         logger.info("\n--- Full Process Complete ---")

@@ -49,8 +49,8 @@ def test_bulk_load_native_uses_single_copy(loader, tmp_path: Path):
 
     loader.bulk_load_native("my_table", tmp_path / "one")
 
-    # Assert that copy_expert was called exactly once
-    mock_cursor.copy_expert.assert_called_once()
+    # Assert that copy was called exactly once
+    mock_cursor.copy.assert_called_once()
     loader.conn.commit.assert_called_once()
 
 
@@ -81,17 +81,6 @@ import psycopg2
 import pyarrow.parquet as pq
 from pathlib import Path
 
-DB_CONN_STR = os.environ.get("DB_CONN_STR")
-
-@pytest.fixture(scope="module")
-def db_conn():
-    """Fixture to provide a database connection for integration tests."""
-    if not DB_CONN_STR:
-        pytest.skip("DB_CONN_STR environment variable not set. Skipping integration tests.")
-
-    conn = psycopg2.connect(DB_CONN_STR)
-    yield conn
-    conn.close()
 
 @pytest.fixture
 def test_loader(db_conn):
@@ -177,7 +166,56 @@ def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
     # Verify upsert
     test_loader.cursor.execute(f"SELECT id, data FROM {final_table} ORDER BY id;")
     result = test_loader.cursor.fetchall()
-    assert result == [(1, 'a'), (2, 'x'), (3, 'c')]
+    # With the new DELETE logic, record 1 should be removed as it's not in the second load.
+    assert result == [(2, 'x'), (3, 'c')]
+
+
+def test_merge_strategy_handles_deletes(test_loader, tmp_path: Path):
+    """Tests that the merge strategy correctly deletes records that are no longer in the source."""
+    staging_schema = "staging"
+    final_schema = "public"
+    dataset = "delete_test"
+    staging_table = f"{staging_schema}.{dataset}"
+    final_table = f"{final_schema}.{dataset}"
+    primary_keys = ["id"]
+
+    # Prepare schemas and drop old tables
+    test_loader.cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {staging_schema};")
+    test_loader.cursor.execute(f"DROP TABLE IF EXISTS {staging_table};")
+    test_loader.cursor.execute(f"DROP TABLE IF EXISTS {final_table};")
+    test_loader.conn.commit()
+
+    # --- 1. Initial Load (with 3 records) ---
+    initial_data = pa.Table.from_pydict({'id': [1, 2, 3], 'data': ['a', 'b', 'c']})
+    parquet_path_initial = tmp_path / "initial"
+    parquet_path_initial.mkdir()
+    pq.write_table(initial_data, parquet_path_initial / "data.parquet")
+
+    test_loader.prepare_staging_table(staging_table, parquet_path_initial)
+    test_loader.bulk_load_native(staging_table, parquet_path_initial)
+    test_loader.execute_merge_strategy(staging_table, final_table, primary_keys)
+
+    # Verify initial load
+    test_loader.cursor.execute(f"SELECT id, data FROM {final_table} ORDER BY id;")
+    result = test_loader.cursor.fetchall()
+    assert result == [(1, 'a'), (2, 'b'), (3, 'c')]
+    assert len(result) == 3
+
+    # --- 2. Second Load (record 'b' is now missing) ---
+    second_load_data = pa.Table.from_pydict({'id': [1, 3], 'data': ['a_updated', 'c']})
+    parquet_path_second = tmp_path / "second"
+    parquet_path_second.mkdir()
+    pq.write_table(second_load_data, parquet_path_second / "data.parquet")
+
+    test_loader.prepare_staging_table(staging_table, parquet_path_second)
+    test_loader.bulk_load_native(staging_table, parquet_path_second)
+    test_loader.execute_merge_strategy(staging_table, final_table, primary_keys)
+
+    # Verify that record 2 was deleted and record 1 was updated
+    test_loader.cursor.execute(f"SELECT id, data FROM {final_table} ORDER BY id;")
+    result = test_loader.cursor.fetchall()
+    assert result == [(1, 'a_updated'), (3, 'c')]
+    assert len(result) == 2
 
 
 def test_schema_alignment(test_loader, tmp_path: Path):

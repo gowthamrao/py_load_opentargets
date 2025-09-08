@@ -1,4 +1,5 @@
-import psycopg2
+import psycopg
+from psycopg import sql
 import pyarrow.parquet as pq
 import pyarrow as pa
 import polars as pl
@@ -93,10 +94,10 @@ class PostgresLoader(DatabaseLoader):
         """Establishes a connection to the PostgreSQL database."""
         logger.info("Connecting to PostgreSQL database...")
         try:
-            self.conn = psycopg2.connect(conn_str)
+            self.conn = psycopg.connect(conn_str)
             self.cursor = self.conn.cursor()
             logger.info("Connection successful.")
-        except psycopg2.OperationalError as e:
+        except psycopg.OperationalError as e:
             logger.error(f"Failed to connect to PostgreSQL: {e}")
             raise
 
@@ -184,7 +185,13 @@ class PostgresLoader(DatabaseLoader):
         streamer = _ParquetStreamer(files=all_files, schema=parquet_schema)
 
         logger.info(f"Executing single COPY command for {len(all_files)} files...")
-        self.cursor.copy_expert(sql=copy_sql, file=streamer)
+        with self.cursor.copy(copy_sql) as copy:
+            while True:
+                chunk = streamer.read(8192) # Read in 8KB chunks
+                if not chunk:
+                    break
+                copy.write(chunk)
+
         total_rows = self.cursor.rowcount
         self.conn.commit()
 
@@ -270,7 +277,10 @@ class PostgresLoader(DatabaseLoader):
         """
         schema, table = table_name.split('.')
         logger.info(f"Retrieving index definitions for table '{table_name}'.")
-        sql = """
+        # psycopg3 requires table names passed to pg_constraint.conrelid to be fully qualified
+        # if they are not in the search path.
+        fully_qualified_table = f'"{schema}"."{table}"'
+        sql_query = """
         SELECT indexname, indexdef
         FROM pg_indexes
         WHERE schemaname = %s AND tablename = %s
@@ -280,7 +290,7 @@ class PostgresLoader(DatabaseLoader):
             WHERE contype = 'p' AND conrelid = %s::regclass
         );
         """
-        self.cursor.execute(sql, (schema, table, f'"{schema}"."{table}"'))
+        self.cursor.execute(sql_query, (schema, table, fully_qualified_table))
         indexes = [{"name": row[0], "ddl": row[1]} for row in self.cursor.fetchall()]
         if indexes:
             logger.info(f"Found {len(indexes)} non-PK indexes: {[i['name'] for i in indexes]}")
@@ -300,7 +310,8 @@ class PostgresLoader(DatabaseLoader):
         for index in indexes:
             index_name = index['name']
             logger.info(f"Dropping index: {index_name}")
-            self.cursor.execute(f'DROP INDEX IF EXISTS "{index_name}";')
+            # Use sql.Identifier for safe quoting
+            self.cursor.execute(sql.SQL("DROP INDEX IF EXISTS {};").format(sql.Identifier(index_name)))
         self.conn.commit()
 
     def recreate_indexes(self, indexes: List[Dict[str, str]]) -> None:
@@ -314,6 +325,7 @@ class PostgresLoader(DatabaseLoader):
         logger.info(f"Recreating {len(indexes)} indexes...")
         for index in indexes:
             logger.info(f"Recreating index using DDL: {index['ddl']}")
+            # The DDL is from pg_indexes, so it's considered safe.
             self.cursor.execute(index['ddl'])
         self.conn.commit()
         logger.info("All indexes recreated successfully.")
@@ -360,9 +372,6 @@ class PostgresLoader(DatabaseLoader):
 
         logger.info(f"Found {len(new_columns)} new columns to add: {', '.join(new_columns)}")
 
-        # Use psycopg2's sql composition to safely quote identifiers
-        from psycopg2 import sql
-
         for col_name in sorted(list(new_columns)): # Sort for deterministic behaviour
             col_type = staging_schema[col_name]
             logger.info(f"Adding column '{col_name}' with type '{col_type}' to '{final_table}'.")
@@ -381,50 +390,124 @@ class PostgresLoader(DatabaseLoader):
 
     def execute_merge_strategy(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:
         """
-        Merges data from the staging table to the final table using an
-        'INSERT ON CONFLICT' (UPSERT) strategy.
+        Merges data from the staging table to the final table using a
+        DELETE-then-UPSERT strategy to handle additions, updates, and deletions.
 
-        If the final table does not exist, it is created and the data is copied.
+        If the final table does not exist, it is created by copying the staging table.
         """
         logger.info(f"Starting merge from '{staging_table}' to '{final_table}'.")
+
+        final_table_ident = sql.Identifier(*final_table.split('.'))
+        staging_table_ident = sql.Identifier(*staging_table.split('.'))
+        pk_idents = [sql.Identifier(k) for k in primary_keys]
 
         # 1. Handle initial load: if final table doesn't exist, create it and copy data
         if not self.table_exists(final_table):
             logger.info(f"Final table '{final_table}' does not exist. Creating and copying data...")
-            self.cursor.execute(f"CREATE TABLE {final_table} AS TABLE {staging_table};")
-            # Add primary key constraint to the new final table
-            pk_constraint_name = f"pk_{final_table.replace('.', '_')}"
-            pk_cols_str = ", ".join([f'"{k}"' for k in primary_keys])
-            self.cursor.execute(f'ALTER TABLE {final_table} ADD CONSTRAINT "{pk_constraint_name}" PRIMARY KEY ({pk_cols_str});')
+            self.cursor.execute(sql.SQL("CREATE TABLE {final} AS TABLE {staging};").format(
+                final=final_table_ident, staging=staging_table_ident
+            ))
+            pk_constraint_name = sql.Identifier(f"pk_{final_table.replace('.', '_')}")
+            self.cursor.execute(sql.SQL("ALTER TABLE {final} ADD CONSTRAINT {pk_name} PRIMARY KEY ({pk_cols});").format(
+                final=final_table_ident,
+                pk_name=pk_constraint_name,
+                pk_cols=sql.SQL(', ').join(pk_idents)
+            ))
             logger.info(f"Successfully created and populated '{final_table}'.")
             self.conn.commit()
             return
 
-        logger.info(f"Final table '{final_table}' exists. Performing UPSERT.")
+        logger.info(f"Final table '{final_table}' exists. Performing DELETE-then-UPSERT.")
 
-        # 2. Get column lists for dynamic SQL generation
+        # --- Stage 1: Delete records that are in the final table but not in the staging table ---
+        join_condition = sql.SQL(' AND ').join(
+            sql.SQL("f.{pk} = s.{pk}").format(pk=pk) for pk in pk_idents
+        )
+        # Check if the first primary key from the staging table is NULL after the LEFT JOIN
+        staging_pk_is_null = sql.SQL("s.{} IS NULL").format(pk_idents[0])
+
+        delete_sql = sql.SQL("""
+            DELETE FROM {final_table} f
+            WHERE EXISTS (
+                SELECT 1
+                FROM {final_table} AS final_inner
+                LEFT JOIN {staging_table} s ON {join_condition_inner}
+                WHERE {staging_pk_is_null_inner}
+                AND f.{pk_final} = final_inner.{pk_final}
+            );
+        """).format(
+            final_table=final_table_ident,
+            staging_table=staging_table_ident,
+            join_condition_inner=sql.SQL(' AND ').join(sql.SQL("final_inner.{pk} = s.{pk}").format(pk=pk) for pk in pk_idents),
+            staging_pk_is_null_inner=sql.SQL("s.{} IS NULL").format(pk_idents[0]),
+            pk_final=pk_idents[0] # Assuming single column PK for simplicity in this part of the query
+        )
+
+        # A more generic way for composite keys
+        final_pk_cols = sql.SQL(',').join(sql.SQL('f.') + pk for pk in pk_idents)
+        select_final_pk_cols = sql.SQL(',').join(sql.SQL('final_inner.') + pk for pk in pk_idents)
+
+        join_condition_inner = sql.SQL(' AND ').join(
+            sql.SQL('final_inner.{pk} = s.{pk}').format(pk=pk) for pk in pk_idents
+        )
+
+        delete_sql_generic = sql.SQL("""
+            DELETE FROM {final_table} f
+            WHERE ({final_pk_cols}) IN (
+                SELECT {select_final_pk_cols}
+                FROM {final_table} AS final_inner
+                LEFT JOIN {staging_table} s ON {join_condition_inner}
+                WHERE s.{first_pk} IS NULL
+            );
+        """).format(
+            final_table=final_table_ident,
+            final_pk_cols=final_pk_cols,
+            select_final_pk_cols=select_final_pk_cols,
+            staging_table=staging_table_ident,
+            join_condition_inner=join_condition_inner,
+            first_pk=pk_idents[0]
+        )
+
+
+        logger.info("Identifying and deleting stale records...")
+        self.cursor.execute(delete_sql_generic)
+        deleted_rows = self.cursor.rowcount
+        logger.info(f"Deleted {deleted_rows} stale records from '{final_table}'.")
+
+
+        # --- Stage 2: Upsert records from staging into final ---
         all_columns = self._get_table_columns(staging_table)
         update_columns = [col for col in all_columns if col not in primary_keys]
 
         if not update_columns:
-            logger.warning(f"No columns to update for table '{final_table}'. All columns are part of the primary key.")
+            logger.warning(f"No columns to update for table '{final_table}'. All columns are part of the primary key. Skipping UPSERT.")
+            self.conn.commit()
             return
 
-        # 3. Dynamically construct the 'INSERT ... ON CONFLICT' SQL
-        all_cols_str = ", ".join([f'"{c}"' for c in all_columns])
-        pk_cols_str = ", ".join([f'"{k}"' for k in primary_keys])
-        update_clause_str = ", ".join([f'"{col}" = EXCLUDED."{col}"' for col in update_columns])
+        all_cols_idents = [sql.Identifier(c) for c in all_columns]
+        update_cols_idents = [sql.Identifier(c) for c in update_columns]
+        update_clause = sql.SQL(', ').join(
+            sql.SQL("{col} = EXCLUDED.{col}").format(col=col) for col in update_cols_idents
+        )
 
-        merge_sql = f"""
-        INSERT INTO {final_table} ({all_cols_str})
-        SELECT {all_cols_str} FROM {staging_table}
-        ON CONFLICT ({pk_cols_str}) DO UPDATE SET
-        {update_clause_str};
-        """
+        upsert_sql = sql.SQL("""
+        INSERT INTO {final_table} ({all_cols})
+        SELECT {all_cols} FROM {staging_table}
+        ON CONFLICT ({pk_cols}) DO UPDATE SET
+        {update_clause};
+        """).format(
+            final_table=final_table_ident,
+            all_cols=sql.SQL(', ').join(all_cols_idents),
+            staging_table=staging_table_ident,
+            pk_cols=sql.SQL(', ').join(pk_idents),
+            update_clause=update_clause
+        )
 
         logger.info("Executing UPSERT operation...")
-        logger.debug(f"Merge SQL:\n{merge_sql}")
-        self.cursor.execute(merge_sql)
+        self.cursor.execute(upsert_sql)
+        upserted_rows = self.cursor.rowcount
+        logger.info(f"Upserted {upserted_rows} rows into '{final_table}'.")
+
         self.conn.commit()
         logger.info(f"Successfully merged data into '{final_table}'.")
 

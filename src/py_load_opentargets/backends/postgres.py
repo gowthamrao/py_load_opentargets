@@ -6,11 +6,76 @@ import logging
 import io
 import json
 from pathlib import Path
-from typing import Dict, Any, Iterator
+from typing import Dict, Any, Iterator, List
 
 from ..loader import DatabaseLoader
 
 logger = logging.getLogger(__name__)
+
+
+class _ParquetStreamer:
+    """
+    A file-like object that streams multiple Parquet files as a single TSV stream.
+
+    This class iterates through a list of Parquet files, processes them with
+    Polars, and streams them as a single, continuous, tab-delimited text stream
+    suitable for PostgreSQL's COPY command. This avoids materializing the
+    entire dataset in memory or on disk as a single CSV file.
+    """
+    def __init__(self, files: List[Path], schema: pa.Schema):
+        self._files = iter(files)
+        self._schema = schema
+        self._buffer = io.StringIO()
+        self._eof = False
+
+    def _load_next_file_into_buffer(self):
+        """Loads the next parquet file into the in-memory buffer."""
+        try:
+            next_file = next(self._files)
+            logger.info(f"Streaming file for COPY: {next_file.name}")
+
+            lf = pl.scan_parquet(next_file)
+
+            # Prepare data for COPY: serialize nested types to JSON
+            select_exprs = []
+            for field in self._schema:
+                col_name = field.name
+                if pa.types.is_struct(field.type) or pa.types.is_list(field.type):
+                    select_exprs.append(pl.col(col_name).to_json().alias(col_name))
+                else:
+                    select_exprs.append(pl.col(col_name))
+            lf = lf.select(select_exprs)
+
+            # Reset buffer and write new data into it
+            self._buffer.seek(0)
+            self._buffer.truncate(0)
+            lf.sink_csv(self._buffer, separator='\t', null_value='\\N', include_header=False)
+            self._buffer.seek(0)
+
+        except StopIteration:
+            logger.info("All files have been streamed.")
+            self._eof = True
+
+    def read(self, size: int = -1) -> str:
+        """
+        Read 'size' bytes from the stream.
+
+        If the buffer is exhausted, it attempts to load the next file.
+        """
+        if self._eof:
+            return ""
+
+        data = self._buffer.read(size)
+        # If we didn't get any data and we are not at EOF, it means the current
+        # file's buffer is empty. Time to load the next one.
+        while not data and not self._eof:
+            self._load_next_file_into_buffer()
+            if self._eof:
+                return "" # No more files to load
+            data = self._buffer.read(size)
+
+        return data
+
 
 class PostgresLoader(DatabaseLoader):
     """
@@ -98,48 +163,32 @@ class PostgresLoader(DatabaseLoader):
     def bulk_load_native(self, table_name: str, parquet_path: Path) -> int:
         """
         Loads data from a directory of Parquet files into a PostgreSQL table
-        using the native COPY command for high performance.
+        using a single, streamed, native COPY command for high performance.
         """
-        total_rows = 0
+        logger.info(f"Starting single-stream bulk load for '{table_name}'.")
 
-        # We need the schema to handle data conversion properly
-        first_file = next(parquet_path.glob("*.parquet"))
-        parquet_schema = pq.read_schema(first_file)
+        # Get a sorted list of all parquet files in the directory
+        all_files = sorted(parquet_path.glob("*.parquet"))
+        if not all_files:
+            logger.warning(f"No .parquet files found in '{parquet_path}'. Skipping bulk load.")
+            return 0
+
+        # We need the schema to handle data conversion properly, infer from first file
+        parquet_schema = pq.read_schema(all_files[0])
 
         # The columns in the COPY command must match the file's columns
         columns_str = ", ".join([f'"{f.name}"' for f in parquet_schema])
         copy_sql = f"COPY {table_name} ({columns_str}) FROM STDIN WITH (FORMAT text, DELIMITER E'\\t', NULL '\\N')"
 
-        for file in sorted(parquet_path.glob("*.parquet")):
-            logger.info(f"Processing file for COPY: {file.name}")
+        # Create our custom streamer instance
+        streamer = _ParquetStreamer(files=all_files, schema=parquet_schema)
 
-            # Use Polars for efficient streaming and data manipulation
-            lf = pl.scan_parquet(file)
-
-            # Prepare data for COPY: serialize nested types to JSON
-            select_exprs = []
-            for field in parquet_schema:
-                col_name = field.name
-                if pa.types.is_struct(field.type) or pa.types.is_list(field.type):
-                    select_exprs.append(pl.col(col_name).to_json().alias(col_name))
-                else:
-                    select_exprs.append(pl.col(col_name))
-
-            lf = lf.select(select_exprs)
-
-            # Stream data to a in-memory buffer
-            buffer = io.StringIO()
-            lf.sink_csv(buffer, separator='\t', null_value='\\N', include_header=False)
-            buffer.seek(0)
-
-            logger.info(f"Executing COPY for {file.name}...")
-            self.cursor.copy_expert(sql=copy_sql, file=buffer)
-            row_count = self.cursor.rowcount
-            total_rows += row_count
-            logger.info(f"Copied {row_count} rows from {file.name}.")
-
+        logger.info(f"Executing single COPY command for {len(all_files)} files...")
+        self.cursor.copy_expert(sql=copy_sql, file=streamer)
+        total_rows = self.cursor.rowcount
         self.conn.commit()
-        logger.info(f"Total rows loaded into '{table_name}': {total_rows}")
+
+        logger.info(f"Total rows loaded into '{table_name}' in a single transaction: {total_rows}")
         return total_rows
 
     # --- Abstract methods not yet implemented in this step ---
@@ -211,6 +260,63 @@ class PostgresLoader(DatabaseLoader):
             (schema, table)
         )
         return self.cursor.fetchone()[0]
+
+    def get_table_indexes(self, table_name: str) -> List[Dict[str, str]]:
+        """
+        Retrieves definitions for all non-primary key indexes on a table.
+
+        :param table_name: The fully qualified name of the table.
+        :return: A list of dicts, where each dict has 'name' and 'ddl' for an index.
+        """
+        schema, table = table_name.split('.')
+        logger.info(f"Retrieving index definitions for table '{table_name}'.")
+        sql = """
+        SELECT indexname, indexdef
+        FROM pg_indexes
+        WHERE schemaname = %s AND tablename = %s
+        AND indexname NOT IN (
+            SELECT conname
+            FROM pg_constraint
+            WHERE contype = 'p' AND conrelid = %s::regclass
+        );
+        """
+        self.cursor.execute(sql, (schema, table, f'"{schema}"."{table}"'))
+        indexes = [{"name": row[0], "ddl": row[1]} for row in self.cursor.fetchall()]
+        if indexes:
+            logger.info(f"Found {len(indexes)} non-PK indexes: {[i['name'] for i in indexes]}")
+        else:
+            logger.info("No non-PK indexes found.")
+        return indexes
+
+    def drop_indexes(self, indexes: List[Dict[str, str]]) -> None:
+        """
+        Drops a list of indexes.
+
+        :param indexes: A list of index definition dicts from get_table_indexes.
+        """
+        if not indexes:
+            return
+        logger.info(f"Dropping {len(indexes)} indexes to improve merge performance...")
+        for index in indexes:
+            index_name = index['name']
+            logger.info(f"Dropping index: {index_name}")
+            self.cursor.execute(f'DROP INDEX IF EXISTS "{index_name}";')
+        self.conn.commit()
+
+    def recreate_indexes(self, indexes: List[Dict[str, str]]) -> None:
+        """
+        Recreates a list of indexes from their DDL definitions.
+
+        :param indexes: A list of index definition dicts from get_table_indexes.
+        """
+        if not indexes:
+            return
+        logger.info(f"Recreating {len(indexes)} indexes...")
+        for index in indexes:
+            logger.info(f"Recreating index using DDL: {index['ddl']}")
+            self.cursor.execute(index['ddl'])
+        self.conn.commit()
+        logger.info("All indexes recreated successfully.")
 
     def _get_table_columns(self, table_name: str) -> list[str]:
         """Retrieves a list of column names for a given table."""

@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import List
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def list_available_versions(discovery_uri: str) -> List[str]:

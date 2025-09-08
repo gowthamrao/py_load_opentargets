@@ -51,7 +51,7 @@ def load(ctx, db_conn_str, backend, version, staging_schema, final_schema, skip_
     if not version:
         click.echo("Discovering the latest version...")
         try:
-            versions = list_available_versions(source_config['ftp_host'], source_config['ftp_path'])
+            versions = list_available_versions(source_config['version_discovery_uri'])
             if not versions:
                 click.secho("Error: Could not find any Open Targets versions.", fg='red'); raise click.Abort()
             version = versions[0]
@@ -103,7 +103,9 @@ def load(ctx, db_conn_str, backend, version, staging_schema, final_schema, skip_
             with tempfile.TemporaryDirectory() as temp_dir_str:
                 temp_dir = Path(temp_dir_str)
                 click.echo(f"Downloading data to {temp_dir}...")
-                parquet_path = download_dataset(source_config['gcs_base_url'], version, dataset_name, temp_dir)
+                parquet_path = download_dataset(
+                    source_config['data_download_uri_template'], version, dataset_name, temp_dir
+                )
 
                 click.echo("Preparing staging schema and table...")
                 loader.prepare_staging_schema(staging_schema)
@@ -113,7 +115,7 @@ def load(ctx, db_conn_str, backend, version, staging_schema, final_schema, skip_
                 row_count = loader.bulk_load_native(staging_table_name, parquet_path)
                 click.echo(f"Loaded {row_count} rows into staging.")
 
-                if loader._table_exists(final_table_full_name):
+                if loader.table_exists(final_table_full_name):
                     click.echo("Aligning schema of final table...")
                     loader.align_final_table_schema(staging_table_name, final_table_full_name)
 

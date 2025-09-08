@@ -1,6 +1,7 @@
 import abc
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
+
 
 class DatabaseLoader(abc.ABC):
     """
@@ -100,6 +101,34 @@ class DatabaseLoader(abc.ABC):
 
         :param staging_table: The name of the staging table (source schema).
         :param final_table: The name of the final table (target schema).
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_table_indexes(self, table_name: str) -> List[Dict[str, str]]:
+        """
+        Retrieve definitions for all non-primary key indexes on a table.
+
+        :param table_name: The fully qualified name of the table.
+        :return: A list of dicts, where each dict has 'name' and 'ddl' for an index.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def drop_indexes(self, indexes: List[Dict[str, str]]) -> None:
+        """
+        Drops a list of indexes, typically before a large data modification.
+
+        :param indexes: A list of index definition dicts, e.g., from get_table_indexes.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def recreate_indexes(self, indexes: List[Dict[str, str]]) -> None:
+        """
+        Recreates a list of indexes from their DDL definitions.
+
+        :param indexes: A list of index definition dicts, e.g., from get_table_indexes.
         """
         raise NotImplementedError
 

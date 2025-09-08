@@ -58,7 +58,7 @@ class ETLOrchestrator:
         db_backend = self.config.get('database', {}).get('backend', 'postgres')
         self.loader_factory = get_db_loader_factory(db_backend)
 
-    def _process_dataset(self, dataset_name: str, db_conn_str: str):
+    def _process_dataset(self, dataset_name: str, db_conn_str: str, max_workers: int):
         """
         Processes a single dataset. Designed to be called in a separate thread.
         It creates its own database loader and connection to ensure thread safety.
@@ -85,7 +85,11 @@ class ETLOrchestrator:
             with tempfile.TemporaryDirectory() as temp_dir_str:
                 temp_dir = Path(temp_dir_str)
                 parquet_path = download_dataset(
-                    source_config['data_download_uri_template'], self.version, dataset_name, temp_dir
+                    source_config['data_download_uri_template'],
+                    self.version,
+                    dataset_name,
+                    temp_dir,
+                    max_workers=max_workers,
                 )
                 loader.prepare_staging_schema(self.staging_schema)
                 loader.prepare_staging_table(staging_table_name, parquet_path)
@@ -138,7 +142,10 @@ class ETLOrchestrator:
         if max_workers > 1:
             logger.info(f"Running with up to {max_workers} parallel workers.")
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_dataset = {executor.submit(self._process_dataset, name, db_conn_str): name for name in self.datasets_to_process}
+                future_to_dataset = {
+                    executor.submit(self._process_dataset, name, db_conn_str, max_workers): name
+                    for name in self.datasets_to_process
+                }
                 for future in as_completed(future_to_dataset):
                     dataset_name = future_to_dataset[future]
                     try:
@@ -149,10 +156,10 @@ class ETLOrchestrator:
                         if not self.continue_on_error:
                             logger.error("Halting due to error in worker.")
                             # The executor will be shut down automatically by the 'with' statement.
-                            return # Exit the run method
+                            return  # Exit the run method
         else:
             logger.info("Running sequentially with a single worker.")
             for dataset in self.datasets_to_process:
-                self._process_dataset(dataset, db_conn_str)
+                self._process_dataset(dataset, db_conn_str, max_workers)
 
         logger.info("\n--- Full Process Complete ---")

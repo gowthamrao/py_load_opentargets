@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from pathlib import Path
 from py_load_opentargets.data_acquisition import list_available_versions, download_dataset
 
@@ -32,23 +32,61 @@ def test_list_available_versions_failure(mock_fsspec):
     assert versions == []
 
 @patch('py_load_opentargets.data_acquisition.fsspec.core.url_to_fs')
-def test_download_dataset_success(mock_url_to_fs, tmp_path: Path):
-    """Tests the successful download of a dataset."""
+def test_download_dataset_sequential_success(mock_url_to_fs, tmp_path: Path):
+    """Tests the successful download of a dataset sequentially when max_workers=1."""
     mock_fs = MagicMock()
     mock_url_to_fs.return_value = (mock_fs, 'mock_remote_path')
+    # It will still glob, but then use the recursive get
+    mock_fs.glob.return_value = ['mock_remote_path/file1.parquet']
 
     uri_template = "gcs://fake-bucket/{version}/{dataset_name}/"
     version = "22.06"
     dataset = "targets"
 
-    result_path = download_dataset(uri_template, version, dataset, tmp_path)
+    # When max_workers is 1, it should use the recursive get
+    result_path = download_dataset(uri_template, version, dataset, tmp_path, max_workers=1)
 
     expected_local_path = tmp_path / version / dataset
     expected_remote_path = 'mock_remote_path'
 
     assert result_path == expected_local_path
-    mock_url_to_fs.assert_called_with(uri_template.format(version=version, dataset_name=dataset), anon=True)
+    mock_fs.glob.assert_called_once_with("mock_remote_path/*.parquet")
     mock_fs.get.assert_called_once_with(expected_remote_path, str(expected_local_path), recursive=True)
+
+
+@patch('py_load_opentargets.data_acquisition.fsspec.core.url_to_fs')
+def test_download_dataset_parallel_success(mock_url_to_fs, tmp_path: Path):
+    """Tests the successful parallel download of multiple files."""
+    mock_fs = MagicMock()
+    mock_url_to_fs.return_value = (mock_fs, 'gcs://fake-bucket/22.06/targets')
+
+    remote_files = [
+        'gcs://fake-bucket/22.06/targets/part-001.parquet',
+        'gcs://fake-bucket/22.06/targets/part-002.parquet',
+        'gcs://fake-bucket/22.06/targets/part-003.parquet',
+    ]
+    mock_fs.glob.return_value = remote_files
+
+    uri_template = "gcs://fake-bucket/{version}/{dataset_name}/"
+    version = "22.06"
+    dataset = "targets"
+
+    result_path = download_dataset(uri_template, version, dataset, tmp_path, max_workers=4)
+
+    expected_local_path = tmp_path / version / dataset
+    assert result_path == expected_local_path
+
+    # Check that glob was called
+    mock_fs.glob.assert_called_once_with("gcs://fake-bucket/22.06/targets/*.parquet")
+
+    # Check that `get` was called for each file individually, not recursively
+    expected_calls = [
+        call(remote_files[0], str(expected_local_path / 'part-001.parquet')),
+        call(remote_files[1], str(expected_local_path / 'part-002.parquet')),
+        call(remote_files[2], str(expected_local_path / 'part-003.parquet')),
+    ]
+    mock_fs.get.assert_has_calls(expected_calls, any_order=True)
+    assert mock_fs.get.call_count == len(remote_files)
 
 
 @patch('py_load_opentargets.data_acquisition.fsspec.core.url_to_fs')
@@ -57,6 +95,8 @@ def test_download_dataset_failure(mock_url_to_fs, tmp_path: Path):
     mock_fs = MagicMock()
     mock_fs.get.side_effect = Exception("GCS download failed")
     mock_url_to_fs.return_value = (mock_fs, 'mock_remote_path')
+    mock_fs.glob.return_value = ['gcs://fake-bucket/22.06/targets/part-001.parquet']
+
 
     with pytest.raises(Exception, match="GCS download failed"):
-        download_dataset("gcs://fake-bucket/{version}/{dataset_name}/", "22.06", "targets", tmp_path)
+        download_dataset("gcs://fake-bucket/{version}/{dataset_name}/", "22.06", "targets", tmp_path, max_workers=2)

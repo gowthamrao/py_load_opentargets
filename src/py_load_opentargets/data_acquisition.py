@@ -41,9 +41,14 @@ def list_available_versions(discovery_uri: str) -> List[str]:
         return []
 
 
-def download_dataset(uri_template: str, version: str, dataset: str, output_dir: Path) -> Path:
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def download_dataset(
+    uri_template: str, version: str, dataset: str, output_dir: Path, max_workers: int = 1
+) -> Path:
     """
     Downloads a specific dataset for a given Open Targets version from a templated URI.
+    If the remote path is a directory, it downloads all files in parallel.
 
     Note:
         This function does not perform checksum validation (FRD R.3.1.5) because,
@@ -54,30 +59,50 @@ def download_dataset(uri_template: str, version: str, dataset: str, output_dir: 
     :param version: The Open Targets version (e.g., '22.04').
     :param dataset: The name of the dataset (e.g., 'targets').
     :param output_dir: The local directory to save the downloaded files.
+    :param max_workers: The maximum number of parallel download threads.
     :return: The path to the directory containing the downloaded dataset.
     """
-    # Format the URI with the specific version and dataset name
     dataset_url = uri_template.format(version=version, dataset_name=dataset)
-
-    # Create a unique local path for this dataset
     local_path = output_dir / version / dataset
+    local_path.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Downloading dataset '{dataset}' for version '{version}'...")
     logger.info(f"Source URI: {dataset_url}")
     logger.info(f"Local destination: {local_path}")
 
     try:
-        # Use fsspec to open the remote URI
         fs, path = fsspec.core.url_to_fs(dataset_url, anon=True)
+        all_files = fs.glob(f"{path}/*.parquet")
 
-        # Ensure the local directory exists
-        local_path.mkdir(parents=True, exist_ok=True)
+        if not all_files:
+            logger.warning(f"No .parquet files found at {dataset_url}. Check the path and dataset name.")
+            return local_path
 
-        # Use fsspec's get to recursively download the data
-        fs.get(path, str(local_path), recursive=True)
+        logger.info(f"Found {len(all_files)} files to download for dataset '{dataset}'.")
 
-        logger.info(f"Successfully downloaded '{dataset}' to {local_path}")
+        if max_workers > 1:
+            logger.info(f"Downloading in parallel with {max_workers} workers.")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_file = {
+                    executor.submit(fs.get, remote_file, str(local_path / Path(remote_file).name)): remote_file
+                    for remote_file in all_files
+                }
+                for future in as_completed(future_to_file):
+                    remote_file = future_to_file[future]
+                    try:
+                        future.result()
+                        logger.debug(f"Successfully downloaded {remote_file}")
+                    except Exception as exc:
+                        logger.error(f"Error downloading {remote_file}: {exc}")
+                        # Depending on desired behavior, you might want to raise here
+                        # or collect errors and raise a summary exception at the end.
+                        raise
+        else:
+            logger.info("Downloading sequentially.")
+            fs.get(path, str(local_path), recursive=True)
+
+        logger.info(f"Successfully downloaded dataset '{dataset}' to {local_path}")
         return local_path
     except Exception as e:
-        logger.error(f"Failed to download dataset '{dataset}' from {dataset_url}: {e}")
+        logger.error(f"Failed to download dataset '{dataset}' from {dataset_url}: {e}", exc_info=True)
         raise

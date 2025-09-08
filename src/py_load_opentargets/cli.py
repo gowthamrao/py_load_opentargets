@@ -6,9 +6,9 @@ from .config import load_config
 from .data_acquisition import list_available_versions
 from .backends import get_loader
 from .orchestrator import ETLOrchestrator
+from .logging_utils import setup_logging
 
 # Configure logging for the CLI
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @click.pass_context
 def cli(ctx, config_path):
     """A CLI tool to download and load Open Targets data."""
+    setup_logging()
     ctx.ensure_object(dict)
     # Load config and attach it to the click context
     ctx.obj['CONFIG'] = load_config(config_path)

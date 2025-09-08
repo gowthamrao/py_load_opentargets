@@ -26,12 +26,14 @@ dependencies = [
     "psycopg[binary]",
     "click",
     "tomli; python_version < '3.11'",
+    "python-json-logger",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest",
     "pytest-postgresql",
+    "ruff",
 ]
 
 [project.urls]

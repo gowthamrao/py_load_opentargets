@@ -1,7 +1,10 @@
 import pytest
 import pyarrow as pa
+import pyarrow.parquet as pq
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 from py_load_opentargets.backends.postgres import PostgresLoader
+from py_load_opentargets.data_acquisition import get_remote_schema
 
 @pytest.fixture
 def loader():
@@ -27,29 +30,35 @@ def test_pyarrow_to_postgres_type(loader, arrow_type, pg_type):
     assert loader._pyarrow_to_postgres_type(arrow_type) == pg_type
 
 # Test CREATE TABLE statement generation
-from unittest.mock import patch, MagicMock
-
-def test_bulk_load_native_uses_single_copy(loader, tmp_path: Path):
+def test_bulk_load_native_streaming_from_remote(loader, mocker):
     """
-    Tests that bulk_load_native uses a single COPY call for multiple files.
-    This is a unit test that mocks the database connection.
+    Tests that bulk_load_native can stream from remote URLs and correctly
+    calls polars.scan_parquet for each URL.
     """
-    # Create dummy parquet files
-    dummy_data = pa.Table.from_pydict({'id': [1]})
-    (tmp_path / "one").mkdir()
-    (tmp_path / "two").mkdir()
-    pq.write_table(dummy_data, tmp_path / "one" / "data1.parquet")
-    pq.write_table(dummy_data, tmp_path / "one" / "data2.parquet")
+    # 1. Setup
+    fake_urls = ["http://a/data1.parquet", "http://a/data2.parquet"]
+    dummy_schema = pa.schema([pa.field("id", pa.int64())])
+    dummy_lazyframe = MagicMock() # Mock Polars LazyFrame
 
-    # Mock the cursor
+    # Mock polars.scan_parquet to return our dummy LazyFrame
+    mock_scan_parquet = mocker.patch(
+        "py_load_opentargets.backends.postgres.pl.scan_parquet",
+        return_value=dummy_lazyframe
+    )
+
+    # Mock the database connection
     mock_cursor = MagicMock()
-    mock_cursor.rowcount = 123 # Simulate rows being copied
+    mock_cursor.rowcount = 123
     loader.cursor = mock_cursor
     loader.conn = MagicMock()
 
-    loader.bulk_load_native("my_table", tmp_path / "one")
+    # 2. Execute
+    loader.bulk_load_native("my_table", fake_urls, dummy_schema)
 
-    # Assert that copy was called exactly once
+    # 3. Assert
+    assert mock_scan_parquet.call_count == len(fake_urls)
+    mock_scan_parquet.assert_any_call(fake_urls[0])
+    mock_scan_parquet.assert_any_call(fake_urls[1])
     mock_cursor.copy.assert_called_once()
     loader.conn.commit.assert_called_once()
 
@@ -138,8 +147,10 @@ def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
     pq.write_table(initial_data, parquet_path / "data.parquet")
 
     # Load into staging
-    test_loader.prepare_staging_table(staging_table, parquet_path)
-    test_loader.bulk_load_native(staging_table, parquet_path)
+    urls = [f"file://{p}" for p in sorted(parquet_path.glob("*.parquet"))]
+    schema = get_remote_schema(urls)
+    test_loader.prepare_staging_table(staging_table, schema)
+    test_loader.bulk_load_native(staging_table, urls, schema)
 
     # Execute merge for the first time (should create the final table)
     test_loader.execute_merge_strategy(staging_table, final_table, primary_keys)
@@ -157,8 +168,10 @@ def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
     pq.write_table(upsert_data, parquet_path_upsert / "data.parquet")
 
     # Load new data into staging (re-using the same staging table)
-    test_loader.prepare_staging_table(staging_table, parquet_path_upsert)
-    test_loader.bulk_load_native(staging_table, parquet_path_upsert)
+    urls_upsert = [f"file://{p}" for p in sorted(parquet_path_upsert.glob("*.parquet"))]
+    schema_upsert = get_remote_schema(urls_upsert)
+    test_loader.prepare_staging_table(staging_table, schema_upsert)
+    test_loader.bulk_load_native(staging_table, urls_upsert, schema_upsert)
 
     # Execute merge for the second time
     test_loader.execute_merge_strategy(staging_table, final_table, primary_keys)
@@ -191,8 +204,10 @@ def test_merge_strategy_handles_deletes(test_loader, tmp_path: Path):
     parquet_path_initial.mkdir()
     pq.write_table(initial_data, parquet_path_initial / "data.parquet")
 
-    test_loader.prepare_staging_table(staging_table, parquet_path_initial)
-    test_loader.bulk_load_native(staging_table, parquet_path_initial)
+    urls_initial = [f"file://{p}" for p in sorted(parquet_path_initial.glob("*.parquet"))]
+    schema_initial = get_remote_schema(urls_initial)
+    test_loader.prepare_staging_table(staging_table, schema_initial)
+    test_loader.bulk_load_native(staging_table, urls_initial, schema_initial)
     test_loader.execute_merge_strategy(staging_table, final_table, primary_keys)
 
     # Verify initial load
@@ -207,8 +222,10 @@ def test_merge_strategy_handles_deletes(test_loader, tmp_path: Path):
     parquet_path_second.mkdir()
     pq.write_table(second_load_data, parquet_path_second / "data.parquet")
 
-    test_loader.prepare_staging_table(staging_table, parquet_path_second)
-    test_loader.bulk_load_native(staging_table, parquet_path_second)
+    urls_second = [f"file://{p}" for p in sorted(parquet_path_second.glob("*.parquet"))]
+    schema_second = get_remote_schema(urls_second)
+    test_loader.prepare_staging_table(staging_table, schema_second)
+    test_loader.bulk_load_native(staging_table, urls_second, schema_second)
     test_loader.execute_merge_strategy(staging_table, final_table, primary_keys)
 
     # Verify that record 2 was deleted and record 1 was updated
@@ -246,7 +263,9 @@ def test_schema_alignment(test_loader, tmp_path: Path):
     parquet_path.mkdir()
     pq.write_table(new_schema_data, parquet_path / "data.parquet")
 
-    test_loader.prepare_staging_table(staging_table, parquet_path)
+    urls = [f"file://{p}" for p in sorted(parquet_path.glob("*.parquet"))]
+    schema = get_remote_schema(urls)
+    test_loader.prepare_staging_table(staging_table, schema)
 
     # 3. Run the alignment logic
     test_loader.align_final_table_schema(staging_table, final_table)
@@ -296,8 +315,11 @@ def test_index_management_during_merge(test_loader, tmp_path: Path):
     parquet_path = tmp_path / "index_data"
     parquet_path.mkdir()
     pq.write_table(staging_data, parquet_path / "data.parquet")
-    test_loader.prepare_staging_table(staging_table, parquet_path)
-    test_loader.bulk_load_native(staging_table, parquet_path)
+
+    urls = [f"file://{p}" for p in sorted(parquet_path.glob("*.parquet"))]
+    schema = get_remote_schema(urls)
+    test_loader.prepare_staging_table(staging_table, schema)
+    test_loader.bulk_load_native(staging_table, urls, schema)
 
     # 3. Spy on the index methods and run the merge
     with patch.object(test_loader, 'drop_indexes', wraps=test_loader.drop_indexes) as spy_drop, \

@@ -18,13 +18,14 @@ class _ParquetStreamer:
     """
     A file-like object that streams multiple Parquet files as a single TSV stream.
 
-    This class iterates through a list of Parquet files, processes them with
-    Polars, and streams them as a single, continuous, tab-delimited text stream
-    suitable for PostgreSQL's COPY command. This avoids materializing the
-    entire dataset in memory or on disk as a single CSV file.
+    This class iterates through a list of Parquet file paths (local or remote),
+    processes them with Polars, and streams them as a single, continuous,
+    tab-delimited text stream suitable for PostgreSQL's COPY command.
+    This avoids materializing the entire dataset in memory or on disk as a
+    single CSV file.
     """
-    def __init__(self, files: List[Path], schema: pa.Schema):
-        self._files = iter(files)
+    def __init__(self, paths: List[str], schema: pa.Schema):
+        self._paths = iter(paths)
         self._schema = schema
         self._buffer = io.StringIO()
         self._eof = False
@@ -32,10 +33,10 @@ class _ParquetStreamer:
     def _load_next_file_into_buffer(self):
         """Loads the next parquet file into the in-memory buffer."""
         try:
-            next_file = next(self._files)
-            logger.info(f"Streaming file for COPY: {next_file.name}")
+            next_path = next(self._paths)
+            logger.info(f"Streaming file for COPY: {next_path}")
 
-            lf = pl.scan_parquet(next_file)
+            lf = pl.scan_parquet(next_path)
 
             # Prepare data for COPY: serialize nested types to JSON
             select_exprs = []
@@ -141,53 +142,45 @@ class PostgresLoader(DatabaseLoader):
         cols_sql = ",\n  ".join(columns)
         return f"CREATE TABLE {table_name} (\n  {cols_sql}\n);"
 
-    def prepare_staging_table(self, table_name: str, parquet_path: Path) -> None:
+    def prepare_staging_table(self, table_name: str, schema: pa.Schema) -> None:
         """
-        Creates a staging table by inferring schema from a Parquet file.
+        Creates a staging table with the given PyArrow schema.
         The table is dropped if it already exists.
         """
         logger.info(f"Preparing staging table '{table_name}'...")
-        # Infer schema from the first Parquet file
-        first_file = next(parquet_path.glob("*.parquet"))
-        parquet_schema = pq.read_schema(first_file)
 
-        create_sql = self._generate_create_table_sql(table_name, parquet_schema)
+        create_sql = self._generate_create_table_sql(table_name, schema)
 
         logger.info(f"Dropping table '{table_name}' if it exists.")
         self.cursor.execute(f"DROP TABLE IF EXISTS {table_name};")
 
-        logger.info(f"Creating table '{table_name}' with inferred schema.")
+        logger.info(f"Creating table '{table_name}' with provided schema.")
         logger.debug(f"CREATE TABLE SQL:\n{create_sql}")
         self.cursor.execute(create_sql)
         self.conn.commit()
 
-    def bulk_load_native(self, table_name: str, parquet_path: Path) -> int:
+    def bulk_load_native(self, table_name: str, parquet_paths: List[str], schema: pa.Schema) -> int:
         """
-        Loads data from a directory of Parquet files into a PostgreSQL table
-        using a single, streamed, native COPY command for high performance.
+        Loads data from a list of Parquet files (local or remote) into a
+        PostgreSQL table using a single, streamed, native COPY command.
         """
         logger.info(f"Starting single-stream bulk load for '{table_name}'.")
 
-        # Get a sorted list of all parquet files in the directory
-        all_files = sorted(parquet_path.glob("*.parquet"))
-        if not all_files:
-            logger.warning(f"No .parquet files found in '{parquet_path}'. Skipping bulk load.")
+        if not parquet_paths:
+            logger.warning(f"No .parquet files provided. Skipping bulk load.")
             return 0
 
-        # We need the schema to handle data conversion properly, infer from first file
-        parquet_schema = pq.read_schema(all_files[0])
-
         # The columns in the COPY command must match the file's columns
-        columns_str = ", ".join([f'"{f.name}"' for f in parquet_schema])
+        columns_str = ", ".join([f'"{f.name}"' for f in schema])
         copy_sql = f"COPY {table_name} ({columns_str}) FROM STDIN WITH (FORMAT text, DELIMITER E'\\t', NULL '\\N')"
 
         # Create our custom streamer instance
-        streamer = _ParquetStreamer(files=all_files, schema=parquet_schema)
+        streamer = _ParquetStreamer(paths=parquet_paths, schema=schema)
 
-        logger.info(f"Executing single COPY command for {len(all_files)} files...")
+        logger.info(f"Executing single COPY command for {len(parquet_paths)} files...")
         with self.cursor.copy(copy_sql) as copy:
             while True:
-                chunk = streamer.read(8192) # Read in 8KB chunks
+                chunk = streamer.read(8192)  # Read in 8KB chunks
                 if not chunk:
                     break
                 copy.write(chunk)

@@ -2,6 +2,8 @@ import fsspec
 import re
 import logging
 import hashlib
+import pyarrow.parquet as pq
+import pyarrow as pa
 from pathlib import Path
 from typing import List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -189,4 +191,56 @@ def download_dataset(
         return local_path
     except Exception as e:
         logger.error(f"Failed to download dataset '{dataset}' from {dataset_url}: {e}", exc_info=True)
+        raise
+
+
+def get_remote_dataset_urls(uri_template: str, version: str, dataset_name: str) -> List[str]:
+    """
+    Lists all remote Parquet file URLs for a given dataset.
+
+    :param uri_template: The fsspec-compatible URI template for data files.
+    :param version: The Open Targets version (e.g., '22.04').
+    :param dataset_name: The name of the dataset (e.g., 'targets').
+    :return: A sorted list of fsspec-compatible URLs for the Parquet files.
+    """
+    dataset_url = uri_template.format(version=version, dataset_name=dataset_name)
+    logger.info(f"Finding remote file URLs for dataset '{dataset_name}' at: {dataset_url}")
+    try:
+        fs, path = fsspec.core.url_to_fs(dataset_url, anon=True)
+        # Use a protocol-aware join for full URLs
+        protocol = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
+        base_url = f"{protocol}://{path}"
+
+        remote_files = sorted([f"{base_url}/{p.split('/')[-1]}" for p in fs.glob(f"{path}/*.parquet")])
+
+        if not remote_files:
+            logger.warning(f"No .parquet files found at {dataset_url}. Check the path and dataset name.")
+
+        logger.info(f"Found {len(remote_files)} remote files for dataset '{dataset_name}'.")
+        return remote_files
+    except Exception as e:
+        logger.error(f"Failed to list remote files for dataset '{dataset_name}': {e}", exc_info=True)
+        raise
+
+
+def get_remote_schema(parquet_urls: List[str]) -> pa.Schema:
+    """
+    Infers the PyArrow schema from the first Parquet file in a list of remote URLs.
+
+    :param parquet_urls: A list of fsspec-compatible URLs.
+    :return: The inferred PyArrow schema.
+    """
+    if not parquet_urls:
+        raise ValueError("Cannot infer schema from an empty list of URLs.")
+
+    first_url = parquet_urls[0]
+    logger.info(f"Inferring schema from first remote file: {first_url}")
+    try:
+        # PyArrow can read the schema directly from a URL using fsspec
+        with fsspec.open(first_url, 'rb') as f:
+            schema = pq.read_schema(f)
+        logger.info("Successfully inferred schema from remote file.")
+        return schema
+    except Exception as e:
+        logger.error(f"Failed to read schema from remote URL '{first_url}': {e}", exc_info=True)
         raise

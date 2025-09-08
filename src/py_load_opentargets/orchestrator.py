@@ -7,7 +7,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from importlib.metadata import entry_points
 
 from .loader import DatabaseLoader
-from .data_acquisition import download_dataset, get_checksum_manifest
+from .data_acquisition import (
+    download_dataset,
+    get_checksum_manifest,
+    get_remote_dataset_urls,
+    get_remote_schema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,7 @@ class ETLOrchestrator:
         db_conn_str: str,
         max_workers: int,
         checksum_manifest: Dict[str, str],
+        load_strategy: str,
     ):
         """
         Processes a single dataset. Designed to be called in a separate thread.
@@ -73,12 +79,15 @@ class ETLOrchestrator:
         loader = self.loader_factory()
         try:
             loader.connect(db_conn_str)
-            all_defined_datasets = self.config['datasets']
-            source_config = self.config['source']
+            all_defined_datasets = self.config["datasets"]
+            source_config = self.config["source"]
+            uri_template = source_config["data_uri_template"]
 
             dataset_config = all_defined_datasets[dataset_name]
-            primary_keys = dataset_config['primary_key']
-            final_table = dataset_config.get('final_table_name', dataset_name.replace('-', '_'))
+            primary_keys = dataset_config["primary_key"]
+            final_table = dataset_config.get(
+                "final_table_name", dataset_name.replace("-", "_")
+            )
             final_table_full_name = f"{self.final_schema}.{final_table}"
             staging_table_name = f"{self.staging_schema}.{dataset_name.replace('-', '_')}"
 
@@ -86,36 +95,76 @@ class ETLOrchestrator:
 
             last_successful_version = loader.get_last_successful_version(dataset_name)
             if last_successful_version == self.version and not self.skip_confirmation:
-                logger.warning(f"Version '{self.version}' of '{dataset_name}' already loaded. Skipping.")
+                logger.warning(
+                    f"Version '{self.version}' of '{dataset_name}' already loaded. Skipping."
+                )
                 return f"Skipped: {dataset_name} version {self.version} already loaded."
 
-            with tempfile.TemporaryDirectory() as temp_dir_str:
-                temp_dir = Path(temp_dir_str)
-                parquet_path = download_dataset(
-                    source_config['data_download_uri_template'],
-                    self.version,
-                    dataset_name,
-                    temp_dir,
-                    checksum_manifest,
-                    max_workers=max_workers,
+            loader.prepare_staging_schema(self.staging_schema)
+
+            if load_strategy == "stream":
+                logger.info(f"Using 'stream' strategy for dataset '{dataset_name}'.")
+                parquet_urls = get_remote_dataset_urls(
+                    uri_template, self.version, dataset_name
                 )
-                loader.prepare_staging_schema(self.staging_schema)
-                loader.prepare_staging_table(staging_table_name, parquet_path)
-                row_count = loader.bulk_load_native(staging_table_name, parquet_path)
+                if not parquet_urls:
+                    logger.warning(f"No remote files found for {dataset_name}, skipping.")
+                    return f"Skipped: {dataset_name} - No files found."
 
-                indexes = []
-                try:
-                    if loader.table_exists(final_table_full_name):
-                        loader.align_final_table_schema(staging_table_name, final_table_full_name)
-                        indexes = loader.get_table_indexes(final_table_full_name)
-                        if indexes: loader.drop_indexes(indexes)
-                    loader.execute_merge_strategy(staging_table_name, final_table_full_name, primary_keys)
-                finally:
-                    if indexes: loader.recreate_indexes(indexes)
+                schema = get_remote_schema(parquet_urls)
+                loader.prepare_staging_table(staging_table_name, schema)
+                row_count = loader.bulk_load_native(
+                    staging_table_name, parquet_urls, schema
+                )
 
-                loader.update_metadata(version=self.version, dataset=dataset_name, success=True, row_count=row_count)
-                logger.info(f"Successfully processed dataset '{dataset_name}'.")
-                return f"Success: {dataset_name}"
+            else: # 'download' strategy
+                logger.info(f"Using 'download' strategy for dataset '{dataset_name}'.")
+                with tempfile.TemporaryDirectory() as temp_dir_str:
+                    temp_dir = Path(temp_dir_str)
+                    download_uri_template = source_config['data_download_uri_template']
+                    parquet_path = download_dataset(
+                        download_uri_template,
+                        self.version,
+                        dataset_name,
+                        temp_dir,
+                        checksum_manifest,
+                        max_workers=max_workers,
+                    )
+
+                    # Still use the new loader functions, but with local file paths
+                    local_urls = [f"file://{p}" for p in sorted(parquet_path.glob("*.parquet"))]
+                    if not local_urls:
+                        logger.warning(f"No local files found for {dataset_name}, skipping.")
+                        return f"Skipped: {dataset_name} - No files found."
+
+                    schema = get_remote_schema(local_urls)
+                    loader.prepare_staging_table(staging_table_name, schema)
+                    row_count = loader.bulk_load_native(staging_table_name, local_urls, schema)
+
+            indexes = []
+            try:
+                if loader.table_exists(final_table_full_name):
+                    loader.align_final_table_schema(
+                        staging_table_name, final_table_full_name
+                    )
+                    indexes = loader.get_table_indexes(final_table_full_name)
+                    if indexes:
+                        loader.drop_indexes(indexes)
+                loader.execute_merge_strategy(
+                    staging_table_name, final_table_full_name, primary_keys
+                )
+            finally:
+                if indexes:
+                    loader.recreate_indexes(indexes)
+
+            loader.update_metadata(
+                version=self.version,
+                dataset=dataset_name,
+                success=True,
+                row_count=row_count,
+            )
+            logger.info(f"Successfully processed dataset '{dataset_name}'.")
+            return f"Success: {dataset_name}"
         except Exception as e:
             logger.error(f"Error processing dataset '{dataset_name}': {e}", exc_info=True)
             error_message = str(e).replace('\n', ' ').strip()
@@ -140,9 +189,13 @@ class ETLOrchestrator:
         logger.info("--- Starting Open Targets ETL Process ---")
         logger.info(f"Selected datasets: {', '.join(self.datasets_to_process)}")
 
-        source_config = self.config['source']
-        max_workers = self.config.get('execution', {}).get('max_workers', 1)
+        source_config = self.config["source"]
+        execution_config = self.config.get("execution", {})
+        max_workers = execution_config.get("max_workers", 1)
+        load_strategy = execution_config.get("load_strategy", "download")
         db_conn_str = os.getenv("DB_CONN_STR")
+
+        logger.info(f"Using load strategy: '{load_strategy}'")
 
         if not db_conn_str:
             logger.error("DB_CONN_STR environment variable not set.")
@@ -150,13 +203,19 @@ class ETLOrchestrator:
 
         # Fetch checksum manifest before starting any downloads
         try:
-            checksum_uri_template = source_config.get('checksum_uri_template')
+            checksum_uri_template = source_config.get("checksum_uri_template")
             if checksum_uri_template:
-                self.checksum_manifest = get_checksum_manifest(self.version, checksum_uri_template)
+                self.checksum_manifest = get_checksum_manifest(
+                    self.version, checksum_uri_template
+                )
             else:
-                logger.warning("No 'checksum_uri_template' found in config. Skipping checksum validation.")
+                logger.warning(
+                    "No 'checksum_uri_template' found in config. Skipping checksum validation."
+                )
         except Exception as e:
-            logger.error(f"Failed to retrieve checksum manifest. Halting process. Error: {e}")
+            logger.error(
+                f"Failed to retrieve checksum manifest. Halting process. Error: {e}"
+            )
             return
 
         if max_workers > 1:
@@ -169,6 +228,7 @@ class ETLOrchestrator:
                         db_conn_str,
                         max_workers,
                         self.checksum_manifest,
+                        load_strategy,
                     ): name
                     for name in self.datasets_to_process
                 }
@@ -178,13 +238,18 @@ class ETLOrchestrator:
                         result = future.result()
                         logger.info(f"Result for {dataset_name}: {result}")
                     except Exception as e:
-                        logger.error(f"Dataset '{dataset_name}' generated an unhandled exception: {e}", exc_info=True)
+                        logger.error(
+                            f"Dataset '{dataset_name}' generated an unhandled exception: {e}",
+                            exc_info=True,
+                        )
                         if not self.continue_on_error:
                             logger.error("Halting due to error in worker.")
                             return
         else:
             logger.info("Running sequentially with a single worker.")
             for dataset in self.datasets_to_process:
-                self._process_dataset(dataset, db_conn_str, max_workers, self.checksum_manifest)
+                self._process_dataset(
+                    dataset, db_conn_str, max_workers, self.checksum_manifest, load_strategy
+                )
 
         logger.info("\n--- Full Process Complete ---")

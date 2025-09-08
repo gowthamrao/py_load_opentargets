@@ -8,31 +8,28 @@ from typing import List
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def list_available_versions(ftp_host: str, ftp_path: str) -> List[str]:
+def list_available_versions(discovery_uri: str) -> List[str]:
     """
-    Lists available Open Targets release versions from the EBI FTP server.
-    FTP is used for listing as GCS bucket listing can require authentication.
+    Lists available Open Targets release versions from any fsspec-compatible URI.
 
-    :param ftp_host: The FTP host (e.g., 'ftp.ebi.ac.uk').
-    :param ftp_path: The path on the FTP server to list versions from.
+    :param discovery_uri: The fsspec-compatible URI to list versions from.
     :return: A list of version strings, sorted from newest to oldest.
     """
-    logger.info(f"Checking for available versions on FTP host {ftp_host}...")
+    logger.info(f"Checking for available versions at {discovery_uri}...")
     try:
-        # Correctly instantiate the FTP filesystem with the host
-        fs = fsspec.filesystem("ftp", host=ftp_host, anon=True)
+        # Use fsspec to open the URI, anon=True is a good default for public data
+        fs, path = fsspec.core.url_to_fs(discovery_uri, anon=True)
 
         version_pattern = re.compile(r"^\d{2}\.\d{2}$")
-        # List contents of the specific path on the host
-        all_paths = fs.ls(ftp_path, detail=False)
+        all_paths = fs.ls(path, detail=False)
 
         # fsspec returns full paths, we just need the directory name
         versions = [
-            Path(p).name for p in all_paths if version_pattern.fullmatch(Path(p).name)
+            Path(p).name for p in all_paths if fs.isdir(p) and version_pattern.fullmatch(Path(p).name)
         ]
 
         if not versions:
-            logger.warning("Could not find any versions matching the pattern 'YY.MM'.")
+            logger.warning(f"Could not find any versions matching the pattern 'YY.MM' at the specified URI.")
             return []
 
         # Sort versions in descending order (newest first)
@@ -41,41 +38,42 @@ def list_available_versions(ftp_host: str, ftp_path: str) -> List[str]:
         logger.info(f"Found versions: {versions}")
         return versions
     except Exception as e:
-        logger.error(f"Failed to list Open Targets versions from FTP: {e}", exc_info=True)
+        logger.error(f"Failed to list Open Targets versions from {discovery_uri}: {e}", exc_info=True)
         return []
 
 
-def download_dataset(gcs_base_url: str, version: str, dataset: str, output_dir: Path) -> Path:
+def download_dataset(uri_template: str, version: str, dataset: str, output_dir: Path) -> Path:
     """
-    Downloads a specific dataset for a given Open Targets version from GCS.
-    GCS is preferred for downloads due to higher speed.
+    Downloads a specific dataset for a given Open Targets version from a templated URI.
 
-    :param gcs_base_url: The base GCS URL for Open Targets data.
+    :param uri_template: The fsspec-compatible URI template.
     :param version: The Open Targets version (e.g., '22.04').
     :param dataset: The name of the dataset (e.g., 'targets').
     :param output_dir: The local directory to save the downloaded files.
     :return: The path to the directory containing the downloaded dataset.
     """
-    # In the new data schema, some dataset names are camelCase.
-    # The folder paths in GCS seem to follow this.
-    dataset_path_name = dataset
-    # Example: associationByDatasourceDirect -> associationByDatasourceDirect
-    # This is a bit of an assumption, may need refinement if paths differ.
+    # Format the URI with the specific version and dataset name
+    dataset_url = uri_template.format(version=version, dataset_name=dataset)
 
-    dataset_url = f"{gcs_base_url}{version}/output/etl/parquet/{dataset_path_name}/"
-    local_path = output_dir / version / dataset_path_name
+    # Create a unique local path for this dataset
+    local_path = output_dir / version / dataset
 
-    logger.info(f"Downloading dataset '{dataset}' for version '{version}' from GCS...")
-    logger.info(f"Source: {dataset_url}")
-    logger.info(f"Destination: {local_path}")
+    logger.info(f"Downloading dataset '{dataset}' for version '{version}'...")
+    logger.info(f"Source URI: {dataset_url}")
+    logger.info(f"Local destination: {local_path}")
 
     try:
-        fs = fsspec.filesystem("gcs", anon=True)
+        # Use fsspec to open the remote URI
+        fs, path = fsspec.core.url_to_fs(dataset_url, anon=True)
+
+        # Ensure the local directory exists
         local_path.mkdir(parents=True, exist_ok=True)
-        fs.get(dataset_url, str(local_path), recursive=True)
+
+        # Use fsspec's get to recursively download the data
+        fs.get(path, str(local_path), recursive=True)
 
         logger.info(f"Successfully downloaded '{dataset}' to {local_path}")
         return local_path
     except Exception as e:
-        logger.error(f"Failed to download dataset '{dataset}' from GCS: {e}")
+        logger.error(f"Failed to download dataset '{dataset}' from {dataset_url}: {e}")
         raise

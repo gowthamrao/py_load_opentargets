@@ -198,9 +198,14 @@ class PostgresLoader(DatabaseLoader):
         result = self.cursor.fetchone()
         return result[0] if result else None
 
-    def _table_exists(self, table_name: str) -> bool:
+    def table_exists(self, table_name: str) -> bool:
         """Checks if a table exists in the database."""
-        schema, table = table_name.split('.')
+        try:
+            schema, table = table_name.split('.')
+        except ValueError:
+            logger.error(f"Invalid table name format '{table_name}'. Expected 'schema.table'.")
+            raise
+
         self.cursor.execute(
             "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = %s AND table_name = %s);",
             (schema, table)
@@ -278,7 +283,7 @@ class PostgresLoader(DatabaseLoader):
         logger.info(f"Starting merge from '{staging_table}' to '{final_table}'.")
 
         # 1. Handle initial load: if final table doesn't exist, create it and copy data
-        if not self._table_exists(final_table):
+        if not self.table_exists(final_table):
             logger.info(f"Final table '{final_table}' does not exist. Creating and copying data...")
             self.cursor.execute(f"CREATE TABLE {final_table} AS TABLE {staging_table};")
             # Add primary key constraint to the new final table

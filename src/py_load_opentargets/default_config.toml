@@ -2,11 +2,15 @@
 # Users can override these settings by creating their own config.toml.
 
 [source]
-# Base URLs for discovering and downloading Open Targets data.
-# GCS is used for high-speed downloads, FTP is used for version discovery.
-gcs_base_url = "gs://open-targets/platform/"
-ftp_host = "ftp.ebi.ac.uk"
-ftp_path = "/pub/databases/opentargets/platform/"
+# fsspec-compatible URI for discovering available Open Targets versions.
+# This points to the FTP server where version directories like '22.04' are listed.
+version_discovery_uri = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/"
+
+# fsspec-compatible URI template for downloading dataset parquet files.
+# This uses GCS for high-speed downloads.
+# Placeholders {version} and {dataset_name} will be filled in by the application.
+data_download_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
+
 
 # Definitions for each dataset to be loaded.
 # Each dataset needs a 'primary_key' list for the merge (UPSERT) operation.

@@ -150,3 +150,49 @@ def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
     test_loader.cursor.execute(f"SELECT id, data FROM {final_table} ORDER BY id;")
     result = test_loader.cursor.fetchall()
     assert result == [(1, 'a'), (2, 'x'), (3, 'c')]
+
+
+def test_schema_alignment(test_loader, tmp_path: Path):
+    """Tests that the schema alignment logic correctly adds new columns."""
+    staging_schema = "staging"
+    final_schema = "public"
+    dataset = "align_test"
+    staging_table = f"{staging_schema}.{dataset}"
+    final_table = f"{final_schema}.{dataset}"
+
+    # Prepare schemas and drop old tables
+    test_loader.cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {staging_schema};")
+    test_loader.cursor.execute(f"DROP TABLE IF EXISTS {staging_table};")
+    test_loader.cursor.execute(f"DROP TABLE IF EXISTS {final_table};")
+
+    # 1. Create a final table with an "old" schema
+    test_loader.cursor.execute(f'CREATE TABLE {final_table} ("id" INT PRIMARY KEY, "data" TEXT);')
+    test_loader.conn.commit()
+
+    # 2. Create a staging table from a parquet file with a "new" schema
+    new_schema_data = pa.Table.from_pydict({
+        'id': [1],
+        'data': ['a'],
+        'new_text_col': ['new'],
+        'new_int_col': [123]
+    })
+    parquet_path = tmp_path / "new_schema"
+    parquet_path.mkdir()
+    pq.write_table(new_schema_data, parquet_path / "data.parquet")
+
+    test_loader.prepare_staging_table(staging_table, parquet_path)
+
+    # 3. Run the alignment logic
+    test_loader.align_final_table_schema(staging_table, final_table)
+
+    # 4. Verify that the final table has the new columns
+    final_columns = test_loader._get_table_columns(final_table)
+    assert "new_text_col" in final_columns
+    assert "new_int_col" in final_columns
+
+    # 5. Verify data types were translated correctly
+    final_schema_from_db = test_loader._get_table_schema_from_db(final_table)
+    # Note: postgres reports 'character varying' or 'text', depending on version/setup.
+    # We check for the general idea, not the exact string.
+    assert final_schema_from_db["new_text_col"].upper() in ("TEXT", "CHARACTER VARYING")
+    assert final_schema_from_db["new_int_col"].upper() in ("BIGINT", "INTEGER")

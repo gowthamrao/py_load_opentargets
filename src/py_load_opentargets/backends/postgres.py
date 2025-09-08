@@ -216,6 +216,58 @@ class PostgresLoader(DatabaseLoader):
         )
         return [row[0] for row in self.cursor.fetchall()]
 
+    def _get_table_schema_from_db(self, table_name: str) -> Dict[str, str]:
+        """
+        Retrieves a dictionary of {column_name: data_type} for a given table.
+        """
+        schema, table = table_name.split('.')
+        self.cursor.execute(
+            """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = %s;
+            """,
+            (schema, table)
+        )
+        return {row[0]: row[1] for row in self.cursor.fetchall()}
+
+    def align_final_table_schema(self, staging_table: str, final_table: str) -> None:
+        """
+        Aligns the schema of the final table to match the staging table.
+        It adds any columns that exist in the staging table but not in the final table.
+        """
+        logger.info(f"Aligning schema of final table '{final_table}' to staging table '{staging_table}'.")
+
+        staging_schema = self._get_table_schema_from_db(staging_table)
+        final_schema = self._get_table_schema_from_db(final_table)
+
+        new_columns = set(staging_schema.keys()) - set(final_schema.keys())
+
+        if not new_columns:
+            logger.info("Schemas are already aligned. No new columns to add.")
+            return
+
+        logger.info(f"Found {len(new_columns)} new columns to add: {', '.join(new_columns)}")
+
+        # Use psycopg2's sql composition to safely quote identifiers
+        from psycopg2 import sql
+
+        for col_name in sorted(list(new_columns)): # Sort for deterministic behaviour
+            col_type = staging_schema[col_name]
+            logger.info(f"Adding column '{col_name}' with type '{col_type}' to '{final_table}'.")
+
+            # Properly quote identifiers to prevent SQL injection
+            alter_sql = sql.SQL("ALTER TABLE {final_table} ADD COLUMN {col_name} {col_type};").format(
+                final_table=sql.Identifier(*final_table.split('.')),
+                col_name=sql.Identifier(col_name),
+                col_type=sql.SQL(col_type) # Type is from information_schema, so it should be safe
+            )
+            self.cursor.execute(alter_sql)
+
+        self.conn.commit()
+        logger.info("Successfully aligned schema.")
+
+
     def execute_merge_strategy(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:
         """
         Merges data from the staging table to the final table using an

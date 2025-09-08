@@ -89,11 +89,20 @@ def load_postgres(db_conn_str, version, dataset, primary_key, staging_schema, fi
             row_count = loader.bulk_load_native(staging_table_name, parquet_path)
             click.echo(f"Loaded {row_count} rows into staging.")
 
-            # 4. Merge
+            # 4. Align Schema (if final table exists)
+            # This is skipped on the first run when the final table doesn't exist yet.
+            # The execute_merge_strategy will create it from the staging table.
+            if loader._table_exists(final_table_full_name):
+                click.echo("Running schema alignment...")
+                loader.align_final_table_schema(staging_table_name, final_table_full_name)
+            else:
+                click.echo(f"Final table '{final_table_full_name}' not found, will be created from staging table. Skipping schema alignment.")
+
+            # 5. Merge
             click.echo(f"Merging data into final table '{final_table_full_name}'...")
             loader.execute_merge_strategy(staging_table_name, final_table_full_name, list(primary_key))
 
-            # 5. Success Metadata
+            # 6. Success Metadata
             loader.update_metadata(version=version, dataset=dataset, success=True, row_count=row_count)
             click.secho(f"\n✅ Success! Merged {row_count} rows into '{final_table_full_name}'.", fg='green')
 

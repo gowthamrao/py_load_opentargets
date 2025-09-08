@@ -1,5 +1,6 @@
 import pytest
 import pyarrow as pa
+from pathlib import Path
 from py_load_opentargets.backends.postgres import PostgresLoader
 
 @pytest.fixture
@@ -26,6 +27,33 @@ def test_pyarrow_to_postgres_type(loader, arrow_type, pg_type):
     assert loader._pyarrow_to_postgres_type(arrow_type) == pg_type
 
 # Test CREATE TABLE statement generation
+from unittest.mock import patch, MagicMock
+
+def test_bulk_load_native_uses_single_copy(loader, tmp_path: Path):
+    """
+    Tests that bulk_load_native uses a single COPY call for multiple files.
+    This is a unit test that mocks the database connection.
+    """
+    # Create dummy parquet files
+    dummy_data = pa.Table.from_pydict({'id': [1]})
+    (tmp_path / "one").mkdir()
+    (tmp_path / "two").mkdir()
+    pq.write_table(dummy_data, tmp_path / "one" / "data1.parquet")
+    pq.write_table(dummy_data, tmp_path / "one" / "data2.parquet")
+
+    # Mock the cursor
+    mock_cursor = MagicMock()
+    mock_cursor.rowcount = 123 # Simulate rows being copied
+    loader.cursor = mock_cursor
+    loader.conn = MagicMock()
+
+    loader.bulk_load_native("my_table", tmp_path / "one")
+
+    # Assert that copy_expert was called exactly once
+    mock_cursor.copy_expert.assert_called_once()
+    loader.conn.commit.assert_called_once()
+
+
 def test_generate_create_table_sql(loader):
     """Tests the generation of a CREATE TABLE SQL statement."""
     schema = pa.schema([
@@ -196,3 +224,60 @@ def test_schema_alignment(test_loader, tmp_path: Path):
     # We check for the general idea, not the exact string.
     assert final_schema_from_db["new_text_col"].upper() in ("TEXT", "CHARACTER VARYING")
     assert final_schema_from_db["new_int_col"].upper() in ("BIGINT", "INTEGER")
+
+
+def test_index_management_during_merge(test_loader, tmp_path: Path):
+    """
+    Tests that indexes are correctly dropped and recreated during a merge.
+    This is an integration test.
+    """
+    staging_schema = "staging"
+    final_schema = "public"
+    dataset = "index_test"
+    staging_table = f"{staging_schema}.{dataset}"
+    final_table = f"{final_schema}.{dataset}"
+    primary_keys = ["id"]
+
+    # Prepare schemas and drop old tables
+    test_loader.cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {staging_schema};")
+    test_loader.cursor.execute(f"DROP TABLE IF EXISTS {staging_table};")
+    test_loader.cursor.execute(f"DROP TABLE IF EXISTS {final_table};")
+
+    # 1. Create a final table and add a non-PK index
+    test_loader.cursor.execute(f'CREATE TABLE {final_table} ("id" INT PRIMARY KEY, "data" TEXT, "indexed_col" TEXT);')
+    test_loader.cursor.execute(f'CREATE INDEX my_test_idx ON {final_table} ("indexed_col");')
+    test_loader.conn.commit()
+
+    # Verify index exists before we start
+    indexes = test_loader.get_table_indexes(final_table)
+    assert len(indexes) == 1
+    assert indexes[0]['name'] == 'my_test_idx'
+
+    # 2. Prepare staging table with data
+    staging_data = pa.Table.from_pydict({'id': [1], 'data': ['a'], 'indexed_col': ['b']})
+    parquet_path = tmp_path / "index_data"
+    parquet_path.mkdir()
+    pq.write_table(staging_data, parquet_path / "data.parquet")
+    test_loader.prepare_staging_table(staging_table, parquet_path)
+    test_loader.bulk_load_native(staging_table, parquet_path)
+
+    # 3. Spy on the index methods and run the merge
+    with patch.object(test_loader, 'drop_indexes', wraps=test_loader.drop_indexes) as spy_drop, \
+         patch.object(test_loader, 'recreate_indexes', wraps=test_loader.recreate_indexes) as spy_recreate:
+
+        # This block simulates the orchestrator's logic
+        indexes_to_manage = test_loader.get_table_indexes(final_table)
+        try:
+            test_loader.drop_indexes(indexes_to_manage)
+            test_loader.execute_merge_strategy(staging_table, final_table, primary_keys)
+        finally:
+            test_loader.recreate_indexes(indexes_to_manage)
+
+        # 4. Assert that the spies were called
+        spy_drop.assert_called_once()
+        spy_recreate.assert_called_once()
+
+    # 5. Verify the index exists again on the actual table
+    final_indexes = test_loader.get_table_indexes(final_table)
+    assert len(final_indexes) == 1
+    assert final_indexes[0]['name'] == 'my_test_idx'

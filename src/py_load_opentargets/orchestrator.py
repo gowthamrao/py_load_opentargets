@@ -102,12 +102,26 @@ class ETLOrchestrator:
                     row_count = self.loader.bulk_load_native(staging_table_name, parquet_path)
                     logger.info(f"Loaded {row_count} rows into staging.")
 
-                    if self.loader.table_exists(final_table_full_name):
-                        logger.info("Aligning schema of final table...")
-                        self.loader.align_final_table_schema(staging_table_name, final_table_full_name)
+                    # Manage schema, indexes, and merge
+                    indexes = []
+                    try:
+                        if self.loader.table_exists(final_table_full_name):
+                            logger.info("Final table exists. Preparing for merge.")
+                            logger.info("Aligning schema of final table...")
+                            self.loader.align_final_table_schema(staging_table_name, final_table_full_name)
 
-                    logger.info(f"Merging data into final table '{final_table_full_name}'...")
-                    self.loader.execute_merge_strategy(staging_table_name, final_table_full_name, primary_keys)
+                            logger.info("Managing indexes for merge performance...")
+                            indexes = self.loader.get_table_indexes(final_table_full_name)
+                            if indexes:
+                                self.loader.drop_indexes(indexes)
+
+                        logger.info(f"Merging data into final table '{final_table_full_name}'...")
+                        self.loader.execute_merge_strategy(staging_table_name, final_table_full_name, primary_keys)
+
+                    finally:
+                        # Always try to recreate indexes, even if merge fails
+                        if indexes:
+                            self.loader.recreate_indexes(indexes)
 
                     self.loader.update_metadata(version=self.version, dataset=dataset_name, success=True, row_count=row_count)
                     logger.info(f"Successfully merged {row_count} rows for dataset '{dataset_name}'.")

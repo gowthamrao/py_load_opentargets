@@ -1,6 +1,6 @@
 import pytest
 import os
-import psycopg2
+import psycopg
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pathlib import Path
@@ -107,3 +107,28 @@ def test_new_cli_end_to_end(db_conn, db_conn_str, mock_data_acquisition, test_co
     cursor.execute("SELECT dataset_name, status FROM _ot_load_metadata ORDER BY dataset_name;")
     meta_data = cursor.fetchall()
     assert meta_data == [("test_data_one", "success"), ("test_data_two", "success")]
+
+
+def test_list_versions_command(monkeypatch, test_config):
+    """
+    Tests the `list-versions` CLI command to ensure it prints the correct output.
+    """
+    # Mock the function that discovers versions
+    def mock_list_versions(discovery_uri: str):
+        return ["22.04", "22.02", "21.11"]
+
+    monkeypatch.setattr("py_load_opentargets.cli.list_available_versions", mock_list_versions)
+
+    runner = CliRunner()
+    args = [
+        "--config", str(test_config),
+        "list-versions",
+    ]
+
+    result = runner.invoke(cli, args, catch_exceptions=False)
+
+    assert result.exit_code == 0, f"CLI command failed with output:\n{result.output}"
+    assert "Available versions (newest first):" in result.output
+    assert "- 22.04" in result.output
+    assert "- 22.02" in result.output
+    assert "- 21.11" in result.output

@@ -22,6 +22,26 @@ def cli(ctx, config_path):
     ctx.obj['CONFIG'] = load_config(config_path)
 
 
+@cli.command(name="list-versions")
+@click.pass_context
+def list_versions_cmd(ctx):
+    """Lists the available Open Targets release versions."""
+    config = ctx.obj['CONFIG']
+    source_config = config['source']
+    click.echo("Discovering available versions...")
+    try:
+        versions = list_available_versions(source_config['version_discovery_uri'])
+        if versions:
+            click.echo(click.style("Available versions (newest first):", bold=True))
+            for version in versions:
+                click.echo(f"- {version}")
+        else:
+            click.secho("Could not find any available Open Targets versions.", fg='yellow')
+    except Exception as e:
+        click.secho(f"Error during version discovery: {e}", fg='red')
+        raise click.Abort()
+
+
 @cli.command()
 @click.option('--db-conn-str', required=True, envvar='DB_CONN_STR', help='Database connection string.')
 @click.option('--backend', default='postgres', show_default=True, help='Database backend to use (e.g., postgres).')

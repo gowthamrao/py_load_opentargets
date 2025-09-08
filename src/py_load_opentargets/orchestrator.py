@@ -1,7 +1,10 @@
+import os
 import logging
 import tempfile
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from importlib.metadata import entry_points
 
 from .loader import DatabaseLoader
 from .data_acquisition import download_dataset
@@ -9,19 +12,34 @@ from .data_acquisition import download_dataset
 logger = logging.getLogger(__name__)
 
 
+def get_db_loader_factory(backend_name: str) -> Callable[[], DatabaseLoader]:
+    """
+    Dynamically creates a factory for a DatabaseLoader instance.
+    This uses entry points to find the correct loader class.
+    """
+    logger.info(f"Looking for database backend '{backend_name}'...")
+    try:
+        # For Python 3.10+
+        eps = entry_points(group='py_load_opentargets.backends')
+    except TypeError:
+        # Fallback for Python < 3.10
+        eps = entry_points()['py_load_opentargets.backends']
+
+    for ep in eps:
+        if ep.name == backend_name:
+            logger.info(f"Found backend entry point: {ep.name}")
+            return ep.load
+    raise ValueError(f"No registered backend found for '{backend_name}'")
+
+
 class ETLOrchestrator:
     """
     Orchestrates the end-to-end ETL process for Open Targets datasets.
-
-    This class is responsible for managing the workflow of downloading,
-    staging, and loading data for a list of specified datasets. It uses a
-    database loader for all database interactions.
     """
 
     def __init__(
         self,
         config: Dict[str, Any],
-        loader: DatabaseLoader,
         datasets_to_process: List[str],
         version: str,
         staging_schema: str,
@@ -29,20 +47,7 @@ class ETLOrchestrator:
         skip_confirmation: bool = False,
         continue_on_error: bool = True,
     ):
-        """
-        Initializes the ETLOrchestrator.
-
-        :param config: The application configuration dictionary.
-        :param loader: An instance of a DatabaseLoader subclass (e.g., PostgresLoader).
-        :param datasets_to_process: A list of dataset names to process.
-        :param version: The Open Targets version string to load.
-        :param staging_schema: The name of the database schema for staging tables.
-        :param final_schema: The name of the database schema for final tables.
-        :param skip_confirmation: If True, skips user prompts for overwriting data.
-        :param continue_on_error: If True, continue processing other datasets if one fails.
-        """
         self.config = config
-        self.loader = loader
         self.datasets_to_process = datasets_to_process
         self.version = version
         self.staging_schema = staging_schema
@@ -50,20 +55,19 @@ class ETLOrchestrator:
         self.skip_confirmation = skip_confirmation
         self.continue_on_error = continue_on_error
 
-    def run(self):
-        """
-        Executes the main ETL workflow for all specified datasets.
-        """
-        logger.info("--- Starting Open Targets ETL Process ---")
-        logger.info(f"Selected datasets: {', '.join(self.datasets_to_process)}")
+        db_backend = self.config.get('database', {}).get('backend', 'postgres')
+        self.loader_factory = get_db_loader_factory(db_backend)
 
-        all_defined_datasets = self.config['datasets']
-        source_config = self.config['source']
-
-        for dataset_name in self.datasets_to_process:
-            if dataset_name not in all_defined_datasets:
-                logger.warning(f"Dataset '{dataset_name}' is not defined in the configuration. Skipping.")
-                continue
+    def _process_dataset(self, dataset_name: str, db_conn_str: str):
+        """
+        Processes a single dataset. Designed to be called in a separate thread.
+        It creates its own database loader and connection to ensure thread safety.
+        """
+        loader = self.loader_factory()
+        try:
+            loader.connect(db_conn_str)
+            all_defined_datasets = self.config['datasets']
+            source_config = self.config['source']
 
             dataset_config = all_defined_datasets[dataset_name]
             primary_keys = dataset_config['primary_key']
@@ -71,78 +75,84 @@ class ETLOrchestrator:
             final_table_full_name = f"{self.final_schema}.{final_table}"
             staging_table_name = f"{self.staging_schema}.{dataset_name.replace('-', '_')}"
 
-            logger.info("\n" + "=" * 80)
-            logger.info(f"Processing dataset: {dataset_name}")
-            logger.info(f"  - Version: {self.version}")
-            logger.info(f"  - Primary Keys: {primary_keys}")
-            logger.info(f"  - Staging Table: {staging_table_name}")
-            logger.info(f"  - Final Table: {final_table_full_name}")
-            logger.info("=" * 80)
+            logger.info(f"Processing dataset: {dataset_name} in thread")
 
-            row_count = 0
-            try:
-                # Idempotency Check
-                last_successful_version = self.loader.get_last_successful_version(dataset_name)
-                if last_successful_version == self.version and not self.skip_confirmation:
-                    logger.warning(f"Version '{self.version}' of '{dataset_name}' already loaded. Skipping as per config.")
-                    continue
+            last_successful_version = loader.get_last_successful_version(dataset_name)
+            if last_successful_version == self.version and not self.skip_confirmation:
+                logger.warning(f"Version '{self.version}' of '{dataset_name}' already loaded. Skipping.")
+                return f"Skipped: {dataset_name} version {self.version} already loaded."
 
-                with tempfile.TemporaryDirectory() as temp_dir_str:
-                    temp_dir = Path(temp_dir_str)
-                    logger.info(f"Downloading data to {temp_dir}...")
-                    parquet_path = download_dataset(
-                        source_config['data_download_uri_template'], self.version, dataset_name, temp_dir
-                    )
+            with tempfile.TemporaryDirectory() as temp_dir_str:
+                temp_dir = Path(temp_dir_str)
+                parquet_path = download_dataset(
+                    source_config['data_download_uri_template'], self.version, dataset_name, temp_dir
+                )
+                loader.prepare_staging_schema(self.staging_schema)
+                loader.prepare_staging_table(staging_table_name, parquet_path)
+                row_count = loader.bulk_load_native(staging_table_name, parquet_path)
 
-                    logger.info("Preparing staging schema and table...")
-                    self.loader.prepare_staging_schema(self.staging_schema)
-                    self.loader.prepare_staging_table(staging_table_name, parquet_path)
-
-                    logger.info(f"Bulk loading into staging table '{staging_table_name}'...")
-                    row_count = self.loader.bulk_load_native(staging_table_name, parquet_path)
-                    logger.info(f"Loaded {row_count} rows into staging.")
-
-                    # Manage schema, indexes, and merge
-                    indexes = []
-                    try:
-                        if self.loader.table_exists(final_table_full_name):
-                            logger.info("Final table exists. Preparing for merge.")
-                            logger.info("Aligning schema of final table...")
-                            self.loader.align_final_table_schema(staging_table_name, final_table_full_name)
-
-                            logger.info("Managing indexes for merge performance...")
-                            indexes = self.loader.get_table_indexes(final_table_full_name)
-                            if indexes:
-                                self.loader.drop_indexes(indexes)
-
-                        logger.info(f"Merging data into final table '{final_table_full_name}'...")
-                        self.loader.execute_merge_strategy(staging_table_name, final_table_full_name, primary_keys)
-
-                    finally:
-                        # Always try to recreate indexes, even if merge fails
-                        if indexes:
-                            self.loader.recreate_indexes(indexes)
-
-                    self.loader.update_metadata(version=self.version, dataset=dataset_name, success=True, row_count=row_count)
-                    logger.info(f"Successfully merged {row_count} rows for dataset '{dataset_name}'.")
-
-            except Exception as e:
-                logger.error(f"Error processing dataset '{dataset_name}': {e}", exc_info=True)
-                error_message = str(e).replace('\n', ' ').strip()
-                self.loader.update_metadata(version=self.version, dataset=dataset_name, success=False, row_count=row_count, error_message=error_message)
-                if not self.continue_on_error:
-                    logger.error("Stopping execution due to error.")
-                    raise  # Re-raise the exception to halt the entire process
-                else:
-                    logger.warning(f"Continuing to next dataset as per configuration.")
-
-            finally:
-                # Cleanup staging table for the processed dataset
+                indexes = []
                 try:
-                    logger.info(f"Dropping staging table '{staging_table_name}'...")
-                    self.loader.cursor.execute(f"DROP TABLE IF EXISTS {staging_table_name};")
-                    self.loader.conn.commit()
+                    if loader.table_exists(final_table_full_name):
+                        loader.align_final_table_schema(staging_table_name, final_table_full_name)
+                        indexes = loader.get_table_indexes(final_table_full_name)
+                        if indexes: loader.drop_indexes(indexes)
+                    loader.execute_merge_strategy(staging_table_name, final_table_full_name, primary_keys)
+                finally:
+                    if indexes: loader.recreate_indexes(indexes)
+
+                loader.update_metadata(version=self.version, dataset=dataset_name, success=True, row_count=row_count)
+                logger.info(f"Successfully processed dataset '{dataset_name}'.")
+                return f"Success: {dataset_name}"
+        except Exception as e:
+            logger.error(f"Error processing dataset '{dataset_name}': {e}", exc_info=True)
+            error_message = str(e).replace('\n', ' ').strip()
+            loader.update_metadata(version=self.version, dataset=dataset_name, success=False, row_count=0, error_message=error_message)
+            if not self.continue_on_error:
+                raise
+            return f"Failed: {dataset_name}"
+        finally:
+            if loader and loader.conn:
+                try:
+                    staging_table_name = f"{self.staging_schema}.{dataset_name.replace('-', '_')}"
+                    loader.cursor.execute(f"DROP TABLE IF EXISTS {staging_table_name};")
+                    loader.conn.commit()
                 except Exception as cleanup_e:
-                    logger.warning(f"Failed to drop staging table '{staging_table_name}': {cleanup_e}")
+                    logger.warning(f"Failed to drop staging table in worker: {cleanup_e}")
+                loader.cleanup()
+
+    def run(self):
+        """
+        Executes the main ETL workflow in parallel for all specified datasets.
+        """
+        logger.info("--- Starting Open Targets ETL Process ---")
+        logger.info(f"Selected datasets: {', '.join(self.datasets_to_process)}")
+
+        max_workers = self.config.get('execution', {}).get('max_workers', 1)
+        db_conn_str = os.getenv("DB_CONN_STR")
+
+        if not db_conn_str:
+            logger.error("DB_CONN_STR environment variable not set.")
+            raise ValueError("Database connection string is required.")
+
+        if max_workers > 1:
+            logger.info(f"Running with up to {max_workers} parallel workers.")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_dataset = {executor.submit(self._process_dataset, name, db_conn_str): name for name in self.datasets_to_process}
+                for future in as_completed(future_to_dataset):
+                    dataset_name = future_to_dataset[future]
+                    try:
+                        result = future.result()
+                        logger.info(f"Result for {dataset_name}: {result}")
+                    except Exception as e:
+                        logger.error(f"Dataset '{dataset_name}' generated an unhandled exception: {e}", exc_info=True)
+                        if not self.continue_on_error:
+                            logger.error("Halting due to error in worker.")
+                            # The executor will be shut down automatically by the 'with' statement.
+                            return # Exit the run method
+        else:
+            logger.info("Running sequentially with a single worker.")
+            for dataset in self.datasets_to_process:
+                self._process_dataset(dataset, db_conn_str)
 
         logger.info("\n--- Full Process Complete ---")

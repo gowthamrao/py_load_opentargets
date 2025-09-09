@@ -3,16 +3,14 @@ import logging
 from typing import Tuple
 
 from .config import load_config
-from .data_acquisition import list_available_versions
-from .orchestrator import ETLOrchestrator
+from .data_acquisition import list_available_versions, discover_datasets
 from .logging_utils import setup_logging
 from .validator import ValidationService
+from . import api
 
 # Configure logging for the CLI
 logger = logging.getLogger(__name__)
 
-
-from .logging_utils import setup_logging
 
 @click.group()
 @click.option('--config', 'config_path', type=click.Path(exists=True), help='Path to a custom config.toml file.')
@@ -20,21 +18,19 @@ from .logging_utils import setup_logging
 @click.pass_context
 def cli(ctx, config_path, json_logs):
     """A CLI tool to download and load Open Targets data."""
+    # The config is now loaded within the API/command function,
+    # so we don't need to load it here anymore. We just pass the path along.
     ctx.ensure_object(dict)
-    config = load_config(config_path)
-    ctx.obj['CONFIG'] = config
+    ctx.obj['CONFIG_PATH'] = config_path
+    ctx.obj['JSON_LOGS'] = json_logs
 
-    # Setup logging
-    # The CLI flag --json-logs takes precedence over the config file setting.
-    use_json_logging = json_logs or config.get('logging', {}).get('json_format', False)
-    setup_logging(json_format=use_json_logging)
 
 
 @cli.command(name="list-versions")
 @click.pass_context
 def list_versions_cmd(ctx):
     """Lists the available Open Targets release versions."""
-    config = ctx.obj['CONFIG']
+    config = load_config(ctx.obj['CONFIG_PATH'])
     source_config = config['source']
     click.echo("Discovering available versions...")
     try:
@@ -56,7 +52,8 @@ def list_versions_cmd(ctx):
 @click.pass_context
 def discover_datasets_cmd(ctx, version, format):
     """Discovers the available datasets for a given Open Targets version."""
-    config = ctx.obj['CONFIG']
+    setup_logging(json_format=ctx.obj.get('JSON_LOGS', False))
+    config = load_config(ctx.obj['CONFIG_PATH'])
     source_config = config['source']
 
     # Prefer a dedicated URI template for discovering datasets.
@@ -76,8 +73,6 @@ def discover_datasets_cmd(ctx, version, format):
 
     click.echo(f"Discovering datasets for version {click.style(version, bold=True)} at {datasets_uri}...")
 
-    # Import lazily to avoid circular dependencies if ever needed
-    from .data_acquisition import discover_datasets
     datasets = discover_datasets(datasets_uri)
 
     if not datasets:
@@ -104,7 +99,8 @@ def discover_datasets_cmd(ctx, version, format):
 @click.pass_context
 def validate(ctx):
     """Checks configuration and connectivity to the database and data source."""
-    config = ctx.obj['CONFIG']
+    setup_logging(json_format=ctx.obj.get('JSON_LOGS', False))
+    config = load_config(ctx.obj['CONFIG_PATH'])
     click.echo("--- Running Configuration and Connection Validator ---")
 
     validator = ValidationService(config)
@@ -146,61 +142,29 @@ def load(ctx, version, staging_schema, final_schema, skip_confirmation, no_conti
     If no datasets are provided, it will process ALL datasets defined in the
     configuration file.
     """
-    config = ctx.obj['CONFIG']
-    source_config = config['source']
-    all_defined_datasets = config['datasets']
-
-    datasets_to_process = list(datasets or all_defined_datasets.keys())
-    click.echo(f"--- Open Targets Universal Loader ---")
-    click.echo(f"Selected datasets: {click.style(', '.join(datasets_to_process), bold=True)}")
-    click.echo(f"Load type: {click.style(load_type, bold=True)}")
-
-    # Run validation checks before proceeding
-    click.echo("Validating configuration and connections...")
-    validator = ValidationService(config)
-    results = validator.run_all_checks()
-    all_successful = True
-    for check_name, result in results.items():
-        if not result["success"]:
-            all_successful = False
-            message = result["message"]
-            click.secho(f"Validation FAILED for '{check_name}': {message}", fg='red')
-
-    if not all_successful:
-        click.secho("Prerequisite validation failed. Please check your configuration.", fg='red', bold=True)
-        raise click.Abort()
-    else:
-        click.echo(click.style("Validation successful.", fg='green'))
-
-
-    if not version:
-        click.echo("Discovering the latest version...")
-        try:
-            versions = list_available_versions(source_config['version_discovery_uri'])
-            if not versions:
-                click.secho("Error: Could not find any Open Targets versions.", fg='red')
-                raise click.Abort()
-            version = versions[0]
-            click.echo(f"Found latest version: {version}")
-        except Exception as e:
-            click.secho(f"Error during version discovery: {e}", fg='red')
-            raise click.Abort()
-
     try:
-        orchestrator = ETLOrchestrator(
-            config=config,
-            datasets_to_process=datasets_to_process,
+        # The --json-logs flag on the `cli` group is the source of truth for the API call.
+        json_logs = ctx.obj.get('JSON_LOGS', False)
+        config_path = ctx.obj.get('CONFIG_PATH')
+
+        # The API function now handles all the orchestration logic.
+        # The CLI's role is simply to gather arguments and call the API.
+        api.load_opentargets(
             version=version,
+            datasets=list(datasets) or None, # Convert tuple to list
+            config_path=config_path,
             staging_schema=staging_schema,
             final_schema=final_schema,
             skip_confirmation=skip_confirmation,
-            continue_on_error=not no_continue_on_error,
-            load_type=load_type
+            continue_on_error=(not no_continue_on_error),
+            load_type=load_type,
+            json_logs=json_logs,
         )
-        orchestrator.run()
 
     except Exception as e:
-        # Catch fatal errors (DB connection string not set, or re-raised from orchestrator)
+        # The API function raises exceptions on failure, which we catch here
+        # to provide a clean exit for the CLI user. The API's own logging
+        # will have already recorded the detailed error.
         click.secho(f"A fatal error occurred: {e}", fg='red')
         raise click.Abort()
     finally:

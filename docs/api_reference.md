@@ -1,66 +1,66 @@
 # Python API Reference
 
-While `py_load_opentargets` is primarily designed as a command-line tool, it also exposes a Python API for integration into other applications and workflows.
+While `py_load_opentargets` is primarily designed as a command-line tool, it also exposes a simple, high-level Python function for integration into other applications and workflows.
 
-## Main Entry Point: `ETLOrchestrator`
+## Main Entry Point: `load_opentargets()`
 
-The main class for programmatic execution is `py_load_opentargets.orchestrator.ETLOrchestrator`.
+The main function for programmatic execution is `py_load_opentargets.load_opentargets()`. This function is a wrapper around the entire ETL orchestration logic, providing a convenient, single entry point.
 
-### Class Signature
+### Function Signature
+The function is available at the top level of the package:
 ```python
-class ETLOrchestrator:
-    def __init__(
-        self,
-        config: Dict[str, Any],
-        datasets_to_process: List[str],
-        version: str,
-        staging_schema: str,
-        final_schema: str,
-        skip_confirmation: bool = False,
-        continue_on_error: bool = True,
-        load_type: str = "delta",
-    ):
-        # ...
+from py_load_opentargets import load_opentargets
 
-    def run(self):
-        # ...
+def load_opentargets(
+    version: Optional[str] = None,
+    datasets: Optional[List[str]] = None,
+    config_path: Optional[str] = None,
+    staging_schema: str = "staging",
+    final_schema: str = "public",
+    skip_confirmation: bool = False,
+    continue_on_error: bool = True,
+    load_type: str = "delta",
+    json_logs: bool = False,
+):
+    # ...
 ```
+For detailed information on the parameters, please refer to the function's docstring.
 
 ### Usage Example
 
-Here is a basic example of how you might use the orchestrator in your own Python script.
+Here is a basic example of how you might use the `load_opentargets` function in your own Python script.
+
+!!! note
+    Before running, ensure the `DB_CONN_STR` environment variable is set with your database connection string.
+    ```bash
+    export DB_CONN_STR="postgresql://user:pass@host:port/dbname"
+    ```
 
 ```python
-import os
-import toml
-from py_load_opentargets.orchestrator import ETLOrchestrator
-from py_load_opentargets.data_acquisition import list_available_versions
+from py_load_opentargets import load_opentargets
 
-# 1. Set the database connection string
-os.environ["DB_CONN_STR"] = "postgresql://user:pass@host:port/dbname"
+try:
+    # Example 1: Load the latest version of the 'targets' and 'diseases' datasets.
+    # Assumes a default or user-configured config.toml file.
+    print("--- Loading latest version of targets and diseases ---")
+    load_opentargets(
+        datasets=["targets", "diseases"],
+        load_type="delta"
+    )
 
-# 2. Load the configuration from a file
-with open("config.toml", "r") as f:
-    config = toml.load(f)
+    # Example 2: Load a specific version with a full refresh.
+    # This will drop and recreate the final tables.
+    print("--- Loading a specific version with a full refresh ---")
+    load_opentargets(
+        version="22.04",
+        datasets=["evidence"],
+        load_type="full-refresh",
+        continue_on_error=False # Stop if the 'evidence' dataset fails
+    )
 
-# 3. Discover the latest version
-latest_version = list_available_versions(config['source']['gcs_base_url'])[0]
+    print("--- All ETL processes completed successfully! ---")
 
-# 4. Define which datasets to process
-datasets = ["targets", "diseases"]
+except Exception as e:
+    print(f"An error occurred during the ETL process: {e}")
 
-# 5. Initialize the orchestrator
-orchestrator = ETLOrchestrator(
-    config=config,
-    datasets_to_process=datasets,
-    version=latest_version,
-    staging_schema="staging",
-    final_schema="public",
-    load_type="delta" # or "full-refresh"
-)
-
-# 6. Run the ETL process
-orchestrator.run()
 ```
-
-This provides a powerful way to embed the Open Targets loading logic directly within a larger data processing pipeline.

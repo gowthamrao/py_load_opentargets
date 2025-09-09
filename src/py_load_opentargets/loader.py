@@ -1,6 +1,6 @@
 import abc
-from pathlib import Path
 from typing import Optional, List, Dict, Any
+import pyarrow as pa
 
 
 class DatabaseLoader(abc.ABC):
@@ -93,24 +93,25 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def prepare_staging_table(self, table_name: str, parquet_path: Path) -> None:
+    def prepare_staging_table(self, table_name: str, schema: pa.Schema) -> None:
         """
-        Create a staging table with a schema inferred from the provided Parquet file.
+        Create a staging table with a schema derived from the provided PyArrow schema.
         The implementation should ensure the table is clean before creation.
 
         :param table_name: The fully qualified name of the staging table.
-        :param parquet_path: Path to the directory of Parquet files for schema inference.
+        :param schema: A PyArrow schema object to derive the table structure from.
         """
         raise NotImplementedError
 
     @abc.abstractmethod
-    def bulk_load_native(self, table_name: str, parquet_path: Path) -> int:
+    def bulk_load_native(self, table_name: str, parquet_uris: List[str], schema: pa.Schema) -> int:
         """
-        Load data from a directory of Parquet files into a table using the
-        database's most efficient, native bulk loading mechanism.
+        Load data from a list of fsspec-compatible Parquet URIs into a table
+        using the database's most efficient, native bulk loading mechanism.
 
         :param table_name: The name of the target staging table.
-        :param parquet_path: The path to the directory containing Parquet files.
+        :param parquet_uris: A list of fsspec-compatible URIs to the Parquet files.
+        :param schema: The PyArrow schema for the Parquet files.
         :return: The total number of rows loaded.
         """
         raise NotImplementedError

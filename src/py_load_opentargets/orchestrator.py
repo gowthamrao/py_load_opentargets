@@ -1,6 +1,7 @@
 import os
 import logging
 import tempfile
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -79,6 +80,8 @@ class ETLOrchestrator:
         It creates its own database loader and connection to ensure thread safety.
         """
         loader = self.loader_factory()
+        start_time = time.time()
+        end_time = None
         try:
             # Get configs
             all_defined_datasets = self.config["datasets"]
@@ -175,18 +178,22 @@ class ETLOrchestrator:
                     if indexes:
                         loader.recreate_indexes(indexes)
 
+            end_time = time.time()
             loader.update_metadata(
                 version=self.version,
                 dataset=dataset_name,
                 success=True,
                 row_count=row_count,
+                start_time=start_time,
+                end_time=end_time,
             )
             logger.info(f"Successfully processed dataset '{dataset_name}'.")
             return f"Success: {dataset_name}"
         except Exception as e:
+            end_time = time.time()
             logger.error(f"Error processing dataset '{dataset_name}': {e}", exc_info=True)
             error_message = str(e).replace('\n', ' ').strip()
-            loader.update_metadata(version=self.version, dataset=dataset_name, success=False, row_count=0, error_message=error_message)
+            loader.update_metadata(version=self.version, dataset=dataset_name, success=False, row_count=0, start_time=start_time, end_time=end_time, error_message=error_message)
             if not self.continue_on_error:
                 raise
             return f"Failed: {dataset_name}"

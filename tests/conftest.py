@@ -1,22 +1,24 @@
 import pytest
 import psycopg
+from testcontainers.postgres import PostgresContainer
 
 @pytest.fixture(scope="session")
-def db_conn_str(postgresql_proc):
+def db_conn_str():
     """
-    Provides a connection string to the temporary, test-managed PostgreSQL instance.
-    The `postgresql_proc` fixture is provided by pytest-postgresql and gives access
-    to the server details.
+    Provides a connection string to a temporary, containerized PostgreSQL instance.
+    This fixture is session-scoped, so the container is started once per test session.
     """
-    return f"postgresql://{postgresql_proc.user}:{postgresql_proc.password}@{postgresql_proc.host}:{postgresql_proc.port}/{postgresql_proc.dbname}"
+    with PostgresContainer("postgres:16-alpine") as postgres:
+        yield postgres.get_connection_url().replace("+psycopg2", "")
 
 @pytest.fixture(scope="function")
-def db_conn(postgresql):
+def db_conn(db_conn_str):
     """
-    Provides a live database connection to the temporary PostgreSQL instance.
-    The `postgresql` fixture is provided by pytest-postgresql and is a
-    ready-to-use connection to the auto-created test database.
+    Provides a live, function-scoped database connection to the containerized
+    PostgreSQL instance. A new connection is created for each test function
+    to ensure test isolation.
     """
-    yield postgresql
-    # The fixture handles closing the connection. The `postgresql` fixture is
-    # function-scoped, so this one must be too.
+    conn = psycopg.connect(db_conn_str)
+    yield conn
+    # Ensure the connection is closed after the test function completes.
+    conn.close()

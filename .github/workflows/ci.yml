@@ -40,7 +40,7 @@ jobs:
       run: |
         export PG_BIN=/usr/lib/postgresql/16/bin
         export PATH="$PATH:$PG_BIN"
-        python -m pytest
+        python -m pytest --cov=src/py_load_opentargets
 
   release:
     needs: build-and-test

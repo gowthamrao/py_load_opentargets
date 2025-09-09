@@ -144,3 +144,17 @@ class DatabaseLoader(abc.ABC):
         :param primary_keys: A list of primary key columns for the merge condition.
         """
         raise NotImplementedError
+
+    @abc.abstractmethod
+    def full_refresh_from_staging(self, staging_table: str, final_table: str, primary_keys: List[str]) -> None:
+        """
+        Performs a full refresh of the final table from the staging table.
+
+        This typically involves renaming the staging table to the final table
+        after dropping the old final table. It should also create primary keys.
+
+        :param staging_table: The name of the staging table.
+        :param final_table: The name of the final destination table.
+        :param primary_keys: A list of primary key columns for the final table.
+        """
+        raise NotImplementedError

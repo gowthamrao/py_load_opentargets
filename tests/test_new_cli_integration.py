@@ -38,6 +38,9 @@ primary_key = ["id"]
 [datasets.test_data_two]
 primary_key = ["key1", "key2"]
 final_table_name = "test_data_two"
+
+[execution]
+max_workers = 1
 """
     config_file = tmp_path / "config.toml"
     config_file.write_text(config_content)
@@ -60,37 +63,72 @@ def mock_data_acquisition(monkeypatch, tmp_path: Path):
     def mock_list_versions(discovery_uri: str):
         return ["25.01"]
 
-    def mock_download(uri_template: str, version: str, dataset: str, output_dir: Path):
+    def mock_download(
+        uri_template: str,
+        version: str,
+        dataset: str,
+        output_dir: Path,
+        checksum_manifest: dict,
+        max_workers: int = 1,
+    ):
+        # The checksum manifest and max_workers args are part of the real function
+        # signature, so we must accept them here in the mock even if we don't use them.
         if dataset == "test_data_one":
             return dataset_path_one
         elif dataset == "test_data_two":
             return dataset_path_two
         pytest.fail(f"Unexpected dataset download requested: {dataset}")
 
+    def mock_get_checksum_manifest(version: str, checksum_uri_template: str):
+        # Return a dummy manifest. The checksums don't need to be real since
+        # the download is also mocked and no verification will occur.
+        return {
+            "output/etl/parquet/test_data_one/data.parquet": "dummy_checksum_1",
+            "output/etl/parquet/test_data_two/data.parquet": "dummy_checksum_2",
+        }
+
     # list_available_versions is called in the CLI module to determine the latest version
     monkeypatch.setattr("py_load_opentargets.cli.list_available_versions", mock_list_versions)
-    # download_dataset is called within the Orchestrator
+    # These two are called from the orchestrator
     monkeypatch.setattr("py_load_opentargets.orchestrator.download_dataset", mock_download)
+    monkeypatch.setattr("py_load_opentargets.orchestrator.get_checksum_manifest", mock_get_checksum_manifest)
 
-@pytest.mark.xfail(reason="This test is failing for an unknown reason related to the CliRunner. "
-                          "The orchestrator does not seem to run, but no exception is thrown. "
-                          "The underlying functionality is verified by other tests. Needs further investigation.")
-def test_new_cli_end_to_end(db_conn, db_conn_str, mock_data_acquisition, test_config):
+import logging
+
+
+@pytest.fixture
+def mock_plain_logging(monkeypatch):
     """
-    Tests the new configuration-driven 'load' command, processing multiple datasets.
+    Mocks the setup_logging function to use a simple, non-JSON format,
+    which is easier to assert against in CLI tests.
+    """
+    def setup_plain_logging():
+        # A much simpler logger for testing purposes.
+        # `force=True` is needed to override any existing logger configuration.
+        logging.basicConfig(level=logging.INFO, format='%(message)s', force=True)
+
+    monkeypatch.setattr("py_load_opentargets.cli.setup_logging", setup_plain_logging)
+
+
+def test_new_cli_end_to_end(db_conn, db_conn_str, mock_data_acquisition, test_config, mock_plain_logging):
+    """
+    Tests the configuration-driven 'load' command end-to-end, processing multiple datasets.
     """
     runner = CliRunner()
     args = [
         "--config", str(test_config),
         "load",
-        "--db-conn-str", db_conn_str,
         "--skip-confirmation",
+        "test_data_one",
+        "test_data_two",
     ]
 
-    result = runner.invoke(cli, args, catch_exceptions=False)
+    # Set the DB connection string as an environment variable for the runner
+    result = runner.invoke(cli, args, catch_exceptions=False, env={"DB_CONN_STR": db_conn_str})
 
     assert result.exit_code == 0, f"CLI command failed with output:\n{result.output}"
-    assert "Processing dataset: test_data_one" in result.output
+    assert "Successfully processed dataset 'test_data_one'" in result.output
+    assert "Successfully processed dataset 'test_data_two'" in result.output
 
     # Verify final table content for the first dataset
     cursor = db_conn.cursor()
@@ -107,6 +145,37 @@ def test_new_cli_end_to_end(db_conn, db_conn_str, mock_data_acquisition, test_co
     cursor.execute("SELECT dataset_name, status FROM _ot_load_metadata ORDER BY dataset_name;")
     meta_data = cursor.fetchall()
     assert meta_data == [("test_data_one", "success"), ("test_data_two", "success")]
+
+
+def test_cli_full_refresh(db_conn, db_conn_str, mock_data_acquisition, test_config, mock_plain_logging):
+    """
+    Tests that the `--load-type=full-refresh` strategy correctly replaces old data.
+    """
+    # 1. Setup: Create the target table and insert some "old" data
+    cursor = db_conn.cursor()
+    cursor.execute("CREATE TABLE public.test_data_one (id BIGINT, data TEXT);")
+    cursor.execute("INSERT INTO public.test_data_one (id, data) VALUES (-1, 'old_data');")
+    db_conn.commit()
+
+    # 2. Run the CLI with the full-refresh option
+    runner = CliRunner()
+    args = [
+        "--config", str(test_config),
+        "load",
+        "--load-type=full-refresh",
+        "--skip-confirmation",
+        "test_data_one" # Only process one dataset for this test
+    ]
+    result = runner.invoke(cli, args, catch_exceptions=False, env={"DB_CONN_STR": db_conn_str})
+
+    assert result.exit_code == 0, f"CLI command failed with output:\n{result.output}"
+    assert "Using 'full-refresh' strategy" in result.output
+
+    # 3. Verify the final table content
+    cursor.execute("SELECT id, data FROM public.test_data_one ORDER BY id;")
+    final_data = cursor.fetchall()
+    # "old_data" should be gone, replaced by the "new" data from the mock fixture
+    assert final_data == [(1, 'a'), (2, 'b')]
 
 
 def test_list_versions_command(monkeypatch, test_config):

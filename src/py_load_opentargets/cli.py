@@ -44,6 +44,56 @@ def list_versions_cmd(ctx):
         raise click.Abort()
 
 
+@cli.command(name="discover-datasets")
+@click.option('--version', required=True, help='The Open Targets version to inspect.')
+@click.option('--format', type=click.Choice(['list', 'toml'], case_sensitive=False), default='list', show_default=True, help='Output format.')
+@click.pass_context
+def discover_datasets_cmd(ctx, version, format):
+    """Discovers the available datasets for a given Open Targets version."""
+    config = ctx.obj['CONFIG']
+    source_config = config['source']
+
+    # Prefer a dedicated URI template for discovering datasets.
+    uri_template = source_config.get('dataset_discovery_uri_template')
+    datasets_uri = ""
+    if uri_template:
+        datasets_uri = uri_template.format(version=version)
+    else:
+        # Fallback to deriving from the data_uri_template
+        logger.warning("`dataset_discovery_uri_template` not found in config, attempting to derive from `data_uri_template`.")
+        data_uri_template = source_config.get('data_uri_template', '')
+        if '{dataset_name}' not in data_uri_template:
+            click.secho("Error: 'data_uri_template' in config is missing the {{dataset_name}} placeholder.", fg='red')
+            raise click.Abort()
+        # Get the base path before the dataset name placeholder
+        datasets_uri = data_uri_template.split('{dataset_name}')[0].format(version=version)
+
+    click.echo(f"Discovering datasets for version {click.style(version, bold=True)} at {datasets_uri}...")
+
+    # Import lazily to avoid circular dependencies if ever needed
+    from .data_acquisition import discover_datasets
+    datasets = discover_datasets(datasets_uri)
+
+    if not datasets:
+        click.secho("Could not find any datasets for this version. Check the version number and your source configuration.", fg='yellow')
+        return
+
+    click.echo()  # Add a newline for spacing
+    if format == 'list':
+        click.echo(click.style("Available datasets:", bold=True))
+        for name in datasets:
+            click.echo(f"- {name}")
+    elif format == 'toml':
+        click.echo(click.style("# Copy and paste the following into your config.toml under the [datasets] section:", bold=True))
+        for name in datasets:
+            click.echo(f'\n[datasets.{name}]')
+            click.echo('primary_key = ["id"] # TODO: Replace with actual primary key(s)')
+            # Generate a sensible default for the table name
+            final_name = name.replace('-', '_')
+            if final_name != name:
+                click.echo(f'final_table_name = "{final_name}"')
+
+
 @cli.command()
 @click.pass_context
 def validate(ctx):

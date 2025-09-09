@@ -23,6 +23,8 @@ provider = "gcs_ftp"
 [source.gcs_ftp]
 version_discovery_uri = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/"
 checksum_uri_template = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/{version}/"
+# This template points to the directory containing all dataset directories.
+dataset_discovery_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/"
 # Note: The 'data_uri_template' is used for streaming/remote operations,
 # while 'data_download_uri_template' could be different if downloads should
 # come from a different source (e.g. GCS for speed). If download template is
@@ -37,6 +39,7 @@ data_download_uri_template = "gcs://open-targets/platform/{version}/output/etl/p
 [source.s3]
 version_discovery_uri = "s3://your-opentargets-bucket/platform/"
 checksum_uri_template = "s3://your-opentargets-bucket/platform/{version}/"
+dataset_discovery_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/"
 data_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
 data_download_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
 

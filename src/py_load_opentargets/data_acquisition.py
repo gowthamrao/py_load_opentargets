@@ -43,6 +43,49 @@ def list_available_versions(discovery_uri: str) -> List[str]:
         return []
 
 
+def discover_datasets(datasets_uri: str) -> List[str]:
+    """
+    Discovers available datasets from a top-level directory URI.
+
+    :param datasets_uri: The fsspec-compatible URI to the top-level directory
+                         containing all dataset subdirectories (e.g., .../parquet/).
+    :return: A sorted list of dataset names (directory names).
+    """
+    logger.info(f"Discovering datasets at {datasets_uri}...")
+    try:
+        fs, path = fsspec.core.url_to_fs(datasets_uri, anon=True)
+        all_entries = fs.ls(path, detail=True)
+
+        if not all_entries:
+            logger.warning(f"No files or directories found at {datasets_uri}.")
+            return []
+
+        # Primary strategy: Use 'type' information if available.
+        if 'type' in all_entries[0]:
+            dataset_names = [
+                Path(entry['name']).name
+                for entry in all_entries
+                if entry.get('type') == 'directory'
+            ]
+        # Fallback strategy: Infer directories from paths.
+        else:
+            logger.info("No 'type' field in listing, inferring directories from path names.")
+            all_paths = [entry['name'] for entry in all_entries]
+            # A path is considered a dataset if its name is not the same as the parent path's name.
+            # This handles cases where the listing includes the parent directory itself.
+            dataset_names = sorted(list({Path(p).name for p in all_paths if Path(p).name != Path(path).name}))
+
+        if not dataset_names:
+            logger.warning(f"Could not find any datasets (subdirectories) at {datasets_uri}.")
+            return []
+
+        logger.info(f"Found {len(dataset_names)} datasets: {sorted(dataset_names)}")
+        return sorted(dataset_names)
+    except Exception as e:
+        logger.error(f"Failed to discover datasets from {datasets_uri}: {e}", exc_info=True)
+        return []
+
+
 def get_checksum_manifest(version: str, checksum_uri_template: str) -> Dict[str, str]:
     """
     Downloads and verifies the checksum manifest for a given Open Targets version.

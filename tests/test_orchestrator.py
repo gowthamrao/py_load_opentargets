@@ -38,15 +38,16 @@ class TestETLOrchestrator(unittest.TestCase):
         self.staging_schema = "staging"
         self.final_schema = "public"
 
+    @patch('py_load_opentargets.orchestrator.verify_remote_dataset')
     @patch('py_load_opentargets.orchestrator.get_remote_schema')
     @patch('py_load_opentargets.orchestrator.get_remote_dataset_urls')
     @patch('py_load_opentargets.orchestrator.get_checksum_manifest')
     @patch('py_load_opentargets.orchestrator.os.getenv')
-    def test_run_happy_path_stream_strategy(self, mock_getenv, mock_get_checksums, mock_get_urls, mock_get_schema):
+    def test_run_happy_path_stream_strategy(self, mock_getenv, mock_get_checksums, mock_get_urls, mock_get_schema, mock_verify_remote):
         """Test a successful run using the 'stream' strategy."""
         # Arrange
         mock_getenv.side_effect = lambda key: "fake_db_conn_str" if key == "DB_CONN_STR" else None
-        mock_get_checksums.return_value = {}
+        mock_get_checksums.return_value = {"output/etl/parquet/targets/file1.parquet": "dummy_hash"}
         mock_get_urls.return_value = ["http://fake/file1.parquet"]
         mock_get_schema.return_value = pa.schema([pa.field("id", pa.int64())])
         self.mock_loader.get_last_successful_version.return_value = None
@@ -77,15 +78,16 @@ class TestETLOrchestrator(unittest.TestCase):
         )
         self.mock_loader.cleanup.assert_called_once()
 
+    @patch('py_load_opentargets.orchestrator.verify_remote_dataset')
     @patch('py_load_opentargets.orchestrator.get_remote_schema')
     @patch('py_load_opentargets.orchestrator.get_remote_dataset_urls')
     @patch('py_load_opentargets.orchestrator.get_checksum_manifest')
     @patch('py_load_opentargets.orchestrator.os.getenv')
-    def test_run_error_handling_stream_strategy(self, mock_getenv, mock_get_checksums, mock_get_urls, mock_get_schema):
+    def test_run_error_handling_stream_strategy(self, mock_getenv, mock_get_checksums, mock_get_urls, mock_get_schema, mock_verify_remote):
         """Test that an error during bulk load is handled correctly with the stream strategy."""
         # Arrange
         mock_getenv.side_effect = lambda key: "fake_db_conn_str" if key == "DB_CONN_STR" else None
-        mock_get_checksums.return_value = {}
+        mock_get_checksums.return_value = {"output/etl/parquet/diseases/file1.parquet": "dummy_hash"}
         mock_get_urls.return_value = ["http://fake/file1.parquet"]
         mock_get_schema.return_value = pa.schema([pa.field("id", pa.int64())])
         self.mock_loader.get_last_successful_version.return_value = None

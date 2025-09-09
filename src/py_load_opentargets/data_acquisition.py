@@ -109,6 +109,29 @@ def _verify_file_checksum(file_path: Path, expected_checksum: str):
     logger.debug(f"Checksum verified for {file_path}")
 
 
+def _verify_remote_file_checksum(remote_url: str, expected_checksum: str):
+    """
+    Calculates and verifies the SHA1 checksum of a remote file streamed via fsspec.
+    """
+    logger.debug(f"Verifying checksum for remote file {remote_url}...")
+    hasher = hashlib.sha1()
+    try:
+        with fsspec.open(remote_url, "rb") as f:
+            while chunk := f.read(8192):
+                hasher.update(chunk)
+        actual_checksum = hasher.hexdigest()
+
+        if actual_checksum != expected_checksum:
+            raise ValueError(
+                f"Checksum mismatch for remote file {remote_url}. "
+                f"Expected {expected_checksum}, got {actual_checksum}."
+            )
+        logger.debug(f"Checksum verified for {remote_url}")
+    except Exception as e:
+        logger.error(f"Failed to verify checksum for {remote_url}: {e}")
+        raise
+
+
 def _download_and_verify_one_file(
     remote_file: str,
     local_path: Path,
@@ -210,6 +233,58 @@ def download_dataset(
     except Exception as e:
         logger.error(f"Failed to download dataset '{dataset}' from {dataset_url}: {e}", exc_info=True)
         raise
+
+
+def verify_remote_dataset(
+    remote_urls: List[str],
+    dataset: str,
+    checksum_manifest: Dict[str, str],
+    max_workers: int = 1,
+):
+    """
+    Verifies the checksums of remote dataset files in parallel.
+
+    :param remote_urls: A list of fsspec-compatible URLs for the dataset files.
+    :param dataset: The name of the dataset.
+    :param checksum_manifest: A dictionary mapping file paths to their SHA1 checksums.
+    :param max_workers: The maximum number of parallel verification threads.
+    """
+    logger.info(
+        f"Verifying checksums for {len(remote_urls)} remote files for dataset '{dataset}'..."
+    )
+
+    if max_workers > 1:
+        logger.info(f"Verifying in parallel with {max_workers} workers.")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_url = {}
+            for url in remote_urls:
+                manifest_key = f"output/etl/parquet/{dataset}/{Path(url).name}"
+                expected_checksum = checksum_manifest.get(manifest_key)
+                if not expected_checksum:
+                    raise KeyError(
+                        f"Checksum not found in manifest for file: {manifest_key}"
+                    )
+                future_to_url[
+                    executor.submit(_verify_remote_file_checksum, url, expected_checksum)
+                ] = url
+
+            for future in as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    future.result()  # Raise exception if verification failed
+                except Exception as exc:
+                    logger.error(f"Error during verification of {url}: {exc}")
+                    raise
+    else:
+        logger.info("Verifying sequentially.")
+        for url in remote_urls:
+            manifest_key = f"output/etl/parquet/{dataset}/{Path(url).name}"
+            expected_checksum = checksum_manifest.get(manifest_key)
+            if not expected_checksum:
+                raise KeyError(f"Checksum not found in manifest for file: {manifest_key}")
+            _verify_remote_file_checksum(url, expected_checksum)
+
+    logger.info(f"Successfully verified all remote files for dataset '{dataset}'.")
 
 
 def get_remote_dataset_urls(uri_template: str, version: str, dataset_name: str) -> List[str]:

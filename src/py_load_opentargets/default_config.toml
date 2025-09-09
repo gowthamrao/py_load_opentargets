@@ -15,32 +15,30 @@ backend = "postgres"
 flatten_separator = "_"
 
 [source]
-# fsspec-compatible URI for discovering available Open Targets versions.
-# This points to the FTP server where version directories like '22.04' are listed.
+# The active data source provider.
+# Can be "gcs_ftp" for the public Open Targets sources or "s3" for a private mirror.
+provider = "gcs_ftp"
+
+# Configuration for the default Google Cloud Storage and FTP sources.
+[source.gcs_ftp]
 version_discovery_uri = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/"
-
-# fsspec-compatible URI template for downloading the checksum manifest.
-# This points to the root of a specific version on the FTP server.
 checksum_uri_template = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/{version}/"
-
-# fsspec-compatible URI template for downloading dataset parquet files.
-# This uses GCS for high-speed downloads.
-# Placeholders {version} and {dataset_name} will be filled in by the application.
+# Note: The 'data_uri_template' is used for streaming/remote operations,
+# while 'data_download_uri_template' could be different if downloads should
+# come from a different source (e.g. GCS for speed). If download template is
+# missing, it falls back to the main data_uri_template.
+data_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
 data_download_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
 
-
-# --- S3 Data Source Example ---
-# To use a private S3 bucket as the data source, comment out the default URIs
-# above and uncomment the lines below.
-#
+# Configuration for using a private S3 bucket as the data source.
+# To use this, set 'provider = "s3"' above.
 # You must also install the S3 dependency: pip install .[s3]
-#
-# Your environment must be configured with AWS credentials (e.g., via environment
-# variables AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY).
-#
-# version_discovery_uri = "s3://your-opentargets-bucket/platform/"
-# checksum_uri_template = "s3://your-opentargets-bucket/platform/{version}/"
-# data_download_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
+# Your environment must be configured with AWS credentials.
+[source.s3]
+version_discovery_uri = "s3://your-opentargets-bucket/platform/"
+checksum_uri_template = "s3://your-opentargets-bucket/platform/{version}/"
+data_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
+data_download_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
 
 
 # Definitions for each dataset to be loaded.

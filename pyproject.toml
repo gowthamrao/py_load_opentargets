@@ -40,7 +40,9 @@ test = [
     "ruff",
     "moto[s3]",
     "boto3",
-    "s3fs",
+    "s3fs>=2023.9.0",
+    "fsspec>=2023.9.0",
+    "toml",
 ]
 docs = [
     "mkdocs",

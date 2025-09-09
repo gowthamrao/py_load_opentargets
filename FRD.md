@@ -1,7 +1,7 @@
-# Functional Requirements Document: py-load-opentargets
+# Functional Requirements Document: py_load_opentargets
 
 **Package Author:** Gowtham Rao <rao@ohdsi.org>
-**Package Name:** `py-load-opentargets`
+**Package Name:** `py_load_opentargets`
 **Version:** 1.0
 
 ---
@@ -10,7 +10,7 @@
 
 ### 1.1 Purpose and Scope
 
-The purpose of the `py-load-opentargets` package is to provide a robust, efficient, and extensible command-line and programmatic tool for downloading and loading Open Targets platform data into various relational database systems.
+The purpose of the `py_load_opentargets` package is to provide a robust, efficient, and extensible command-line and programmatic tool for downloading and loading Open Targets platform data into various relational database systems.
 
 **Scope:**
 *   **In-Scope:**

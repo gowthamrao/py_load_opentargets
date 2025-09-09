@@ -1,6 +1,6 @@
 # Architecture
 
-The `py-load-opentargets` package is designed to be modular, extensible, and performant. This document provides an overview of its internal architecture.
+The `py_load_opentargets` package is designed to be modular, extensible, and performant. This document provides an overview of its internal architecture.
 
 ## Core Components
 
@@ -47,7 +47,7 @@ The `PostgresLoader` is a highly optimized implementation for PostgreSQL.
 
 The use of `entry_points` makes it possible to add support for a new database (e.g., DuckDB, Redshift) without modifying the core package. To do so, a developer would:
 
-1.  Create a new Python package (e.g., `py-load-opentargets-duckdb`).
+1.  Create a new Python package (e.g., `py_load_opentargets-duckdb`).
 2.  In that package, create a new loader class that inherits from `py_load_opentargets.DatabaseLoader`.
 3.  Implement all the abstract methods with logic specific to the new database.
 4.  In the new package's `pyproject.toml`, register the new loader class under the `py_load_opentargets.backends` entry point group.

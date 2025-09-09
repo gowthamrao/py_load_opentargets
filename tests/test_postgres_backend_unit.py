@@ -123,3 +123,53 @@ def test_postgres_loader_adheres_to_abc():
         PostgresLoader()
     except TypeError as e:
         pytest.fail(f"PostgresLoader failed to instantiate. It might be missing implementation for an abstract method. Error: {e}")
+
+
+def test_align_final_table_schema_detects_all_drift_types(loader, mocker, caplog):
+    """
+    Tests that align_final_table_schema correctly detects new columns,
+    mismatched types, and removed columns, then takes the correct actions
+    (adds new columns and warns about the others).
+    """
+    # 1. Setup
+    # Mock the database connection and cursor
+    mock_conn = mocker.patch('psycopg.connect').return_value
+    mock_conn.info.encoding = "utf-8"  # psycopg3 uses conn.info.encoding
+    mock_cursor = mock_conn.cursor.return_value
+    loader.conn = mock_conn
+    loader.cursor = mock_cursor
+
+    # Define the schemas that will be returned by the mocked DB query
+    final_schema = {
+        "id": "bigint",
+        "score": "double precision", # This will be mismatched
+        "description": "text",
+        "old_column": "boolean" # This will be removed
+    }
+    staging_schema = {
+        "id": "bigint",
+        "score": "text", # Mismatched type
+        "description": "text",
+        "new_column": "jsonb" # New column
+    }
+
+    # Mock the method that queries the DB for schemas
+    mocker.patch.object(
+        loader,
+        '_get_table_schema_from_db',
+        side_effect=[staging_schema, final_schema]
+    )
+
+    # 2. Act
+    loader.align_final_table_schema("staging.table", "final.table")
+
+    # 3. Assert
+    # a. Assert that ALTER TABLE was called to add the new column
+    mock_cursor.execute.assert_called_once()
+    call_args = mock_cursor.execute.call_args[0][0].as_string(mock_conn)
+    assert 'ALTER TABLE "final"."table" ADD COLUMN "new_column" jsonb' in call_args
+
+    # b. Assert that warnings were logged for mismatched types and removed columns
+    assert "SCHEMA DRIFT DETECTED for column 'score'" in caplog.text
+    assert "Staging table type is 'text', but final table type is 'double precision'" in caplog.text
+    assert "exist in the final table 'final.table' but not in the new data source: old_column" in caplog.text

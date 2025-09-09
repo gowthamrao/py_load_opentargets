@@ -63,6 +63,24 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         logger.info("Using default configuration.")
         _config = default_config
 
+    # --- Dynamic Source Provider Logic ---
+    # After merging, resolve the source provider to flatten the URI keys.
+    source_config = _config.get('source', {})
+    provider = source_config.get('provider')
+
+    if provider and provider in source_config:
+        logger.info(f"Resolving source configuration for provider: '{provider}'")
+        provider_uris = source_config.get(provider, {})
+        # Merge the selected provider's URIs into the top-level source config
+        source_config.update(provider_uris)
+    elif provider:
+        logger.warning(
+            f"Source provider '{provider}' is specified but no corresponding "
+            f"configuration section '[source.{provider}]' was found. "
+            "Using default top-level URIs if available."
+        )
+    # --- End Dynamic Source Provider Logic ---
+
     return _config
 
 def get_config() -> Dict[str, Any]:

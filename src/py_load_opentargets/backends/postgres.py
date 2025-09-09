@@ -499,35 +499,64 @@ class PostgresLoader(DatabaseLoader):
     def align_final_table_schema(self, staging_table: str, final_table: str) -> None:
         """
         Aligns the schema of the final table to match the staging table.
-        It adds any columns that exist in the staging table but not in the final table.
+        - Adds any columns that exist in the staging table but not in the final table.
+        - Warns about any columns that have different data types between the two tables.
         """
-        logger.info(f"Aligning schema of final table '{final_table}' to staging table '{staging_table}'.")
+        logger.info(f"Aligning schema of final table '{final_table}' with staging table '{staging_table}'.")
 
         staging_schema = self._get_table_schema_from_db(staging_table)
         final_schema = self._get_table_schema_from_db(final_table)
 
-        new_columns = set(staging_schema.keys()) - set(final_schema.keys())
+        staging_cols = set(staging_schema.keys())
+        final_cols = set(final_schema.keys())
 
-        if not new_columns:
-            logger.info("Schemas are already aligned. No new columns to add.")
-            return
+        # 1. Check for new columns to add
+        new_columns = staging_cols - final_cols
+        if new_columns:
+            logger.info(f"Found {len(new_columns)} new columns to add: {', '.join(sorted(new_columns))}")
+            for col_name in sorted(list(new_columns)):
+                col_type = staging_schema[col_name]
+                logger.info(f"Adding column '{col_name}' with type '{col_type}' to '{final_table}'.")
+                alter_sql = sql.SQL("ALTER TABLE {final_table} ADD COLUMN {col_name} {col_type};").format(
+                    final_table=sql.Identifier(*final_table.split('.')),
+                    col_name=sql.Identifier(col_name),
+                    col_type=sql.SQL(col_type)
+                )
+                self.cursor.execute(alter_sql)
+            self.conn.commit()
+            logger.info("Successfully added new columns.")
+        else:
+            logger.info("No new columns to add.")
 
-        logger.info(f"Found {len(new_columns)} new columns to add: {', '.join(new_columns)}")
+        # 2. Check for type mismatches in common columns
+        common_columns = staging_cols.intersection(final_cols)
+        mismatched_columns = []
+        for col_name in common_columns:
+            # Normalize types for comparison, e.g., 'character varying' -> 'varchar'
+            staging_type = staging_schema[col_name].lower().replace("character varying", "varchar")
+            final_type = final_schema[col_name].lower().replace("character varying", "varchar")
 
-        for col_name in sorted(list(new_columns)): # Sort for deterministic behaviour
-            col_type = staging_schema[col_name]
-            logger.info(f"Adding column '{col_name}' with type '{col_type}' to '{final_table}'.")
+            if staging_type != final_type:
+                mismatched_columns.append(col_name)
+                logger.warning(
+                    f"SCHEMA DRIFT DETECTED for column '{col_name}': "
+                    f"Staging table type is '{staging_type}', but final table type is '{final_type}'. "
+                    "The loader will not attempt to alter the column."
+                )
 
-            # Properly quote identifiers to prevent SQL injection
-            alter_sql = sql.SQL("ALTER TABLE {final_table} ADD COLUMN {col_name} {col_type};").format(
-                final_table=sql.Identifier(*final_table.split('.')),
-                col_name=sql.Identifier(col_name),
-                col_type=sql.SQL(col_type) # Type is from information_schema, so it should be safe
+        if not mismatched_columns:
+            logger.info("No data type mismatches found in common columns.")
+
+        # 3. (Optional) Warn about columns removed in the new version
+        removed_columns = final_cols - staging_cols
+        if removed_columns:
+            logger.warning(
+                f"The following columns exist in the final table '{final_table}' but not in the "
+                f"new data source: {', '.join(sorted(removed_columns))}. These columns will be "
+                "kept with their existing data, but will be NULL for new/updated rows."
             )
-            self.cursor.execute(alter_sql)
 
-        self.conn.commit()
-        logger.info("Successfully aligned schema.")
+        logger.info(f"Schema alignment check for '{final_table}' complete.")
 
 
     def execute_merge_strategy(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:

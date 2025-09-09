@@ -20,7 +20,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "fsspec[gcs]",
+    "fsspec",
     "pyarrow",
     "polars",
     "psycopg[binary]",
@@ -30,11 +30,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gcs = ["gcsfs"]
+s3 = ["s3fs"]
+all_cloud = ["gcsfs", "s3fs"]
 test = [
     "pytest",
     "testcontainers[postgres]",
     "pytest-mock",
     "ruff",
+    "moto[s3]",
+    "boto3",
 ]
 docs = [
     "mkdocs",

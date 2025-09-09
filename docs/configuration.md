@@ -1,6 +1,6 @@
 # Configuration Reference
 
-The `py-load-opentargets` tool is configured using a single `config.toml` file. This page provides a reference for all available settings.
+The `py_load_opentargets` tool is configured using a single `config.toml` file. This page provides a reference for all available settings.
 
 ## Top-Level Sections
 

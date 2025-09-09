@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "py-load-opentargets"
+name = "py_load_opentargets"
 version = "0.1.0"
 authors = [
     { name = "Gowtham Rao", email = "rao@ohdsi.org" },
@@ -42,11 +42,11 @@ docs = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/ohdsi/py-load-opentargets" # Placeholder
-"Bug Tracker" = "https://github.com/ohdsi/py-load-opentargets/issues" # Placeholder
+"Homepage" = "https://github.com/ohdsi/py_load_opentargets" # Placeholder
+"Bug Tracker" = "https://github.com/ohdsi/py_load_opentargets/issues" # Placeholder
 
 [project.scripts]
-py-load-opentargets = "py_load_opentargets.cli:cli"
+py_load_opentargets = "py_load_opentargets.cli:cli"
 
 [project.entry-points."py_load_opentargets.backends"]
 postgres = "py_load_opentargets.backends.postgres:PostgresLoader"

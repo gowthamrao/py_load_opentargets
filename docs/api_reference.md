@@ -1,6 +1,6 @@
 # Python API Reference
 
-While `py-load-opentargets` is primarily designed as a command-line tool, it also exposes a Python API for integration into other applications and workflows.
+While `py_load_opentargets` is primarily designed as a command-line tool, it also exposes a Python API for integration into other applications and workflows.
 
 ## Main Entry Point: `ETLOrchestrator`
 

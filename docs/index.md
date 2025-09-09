@@ -1,4 +1,4 @@
-# py-load-opentargets
+# py_load_opentargets
 
 A package to efficiently load Open Targets data into a relational database, designed for performance, extensibility, and ease of use.
 
@@ -61,13 +61,13 @@ export DB_CONN_STR="postgresql://user:password@host:port/database"
 **To load ALL datasets defined in your configuration:**
 
 ```bash
-py-load-opentargets load
+py_load_opentargets load
 ```
 
 **To load only specific datasets:**
 
 ```bash
-py-load-opentargets load targets diseases
+py_load_opentargets load targets diseases
 ```
 
 The tool will:

@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide provides a detailed walkthrough for setting up and running `py-load-opentargets` for the first time.
+This guide provides a detailed walkthrough for setting up and running `py_load_opentargets` for the first time.
 
 ## 1. Installation
 
@@ -9,7 +9,7 @@ The package is distributed via PyPI. You can install it using `pip`. It is highl
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install py-load-opentargets
+pip install py_load_opentargets
 ```
 
 If you have a local clone of the repository, you can install it in editable mode:
@@ -70,18 +70,18 @@ Once configured, you can run the loader from your terminal.
 ### Choosing a Version
 By default, the tool will automatically discover and use the latest Open Targets release. You can also specify a version with the `--version` flag:
 ```bash
-py-load-opentargets --version 24.06 load
+py_load_opentargets --version 24.06 load
 ```
 
 ### Loading Data
 To load all datasets defined in your `config.toml`:
 ```bash
-py-load-opentargets load
+py_load_opentargets load
 ```
 
 To load only a specific subset of datasets:
 ```bash
-py-load-opentargets load targets diseases
+py_load_opentargets load targets diseases
 ```
 
 The tool will perform the following steps for each dataset:

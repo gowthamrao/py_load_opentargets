@@ -6,7 +6,6 @@ import polars as pl
 import logging
 import io
 import json
-from pathlib import Path
 from typing import Dict, Any, Iterator, List, Optional
 
 from ..loader import DatabaseLoader
@@ -231,14 +230,14 @@ class PostgresLoader(DatabaseLoader):
         self.cursor.execute(create_sql)
         self.conn.commit()
 
-    def bulk_load_native(self, table_name: str, parquet_paths: List[str], schema: pa.Schema) -> int:
+    def bulk_load_native(self, table_name: str, parquet_uris: List[str], schema: pa.Schema) -> int:
         """
         Loads data from a list of Parquet files into a PostgreSQL table using a
         single, streamed, native COPY command, handling data transformations on the fly.
         """
         logger.info(f"Starting single-stream bulk load for '{table_name}'.")
 
-        if not parquet_paths:
+        if not parquet_uris:
             logger.warning(f"No .parquet files provided. Skipping bulk load.")
             return 0
 
@@ -251,13 +250,13 @@ class PostgresLoader(DatabaseLoader):
         copy_sql = f"COPY {table_name} ({columns_str}) FROM STDIN WITH (FORMAT text, DELIMITER E'\\t', NULL '\\N')"
 
         streamer = _ParquetStreamer(
-            paths=parquet_paths,
+            paths=parquet_uris,
             original_schema=schema,
             schema_overrides=schema_overrides,
             flatten_separator=flatten_separator,
         )
 
-        logger.info(f"Executing single COPY command for {len(parquet_paths)} files...")
+        logger.info(f"Executing single COPY command for {len(parquet_uris)} files...")
         with self.cursor.copy(copy_sql) as copy:
             while True:
                 chunk = streamer.read(8192)

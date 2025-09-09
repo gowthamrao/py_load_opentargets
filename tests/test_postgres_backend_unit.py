@@ -106,3 +106,20 @@ def test_generate_create_table_sql_with_flattened_schema(loader):
   "some_other_data" JSONB
 );"""
     assert sql.strip() == expected_sql.strip()
+
+
+def test_postgres_loader_adheres_to_abc():
+    """
+    Tests that PostgresLoader correctly implements the DatabaseLoader ABC.
+    """
+    from py_load_opentargets.loader import DatabaseLoader
+
+    # 1. Check if it's a subclass. This verifies the inheritance.
+    assert issubclass(PostgresLoader, DatabaseLoader)
+
+    # 2. Check if it can be instantiated. This fails if any abstract methods
+    #    are not implemented, which is the core check for the contract.
+    try:
+        PostgresLoader()
+    except TypeError as e:
+        pytest.fail(f"PostgresLoader failed to instantiate. It might be missing implementation for an abstract method. Error: {e}")

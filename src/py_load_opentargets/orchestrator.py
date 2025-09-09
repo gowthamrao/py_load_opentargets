@@ -118,25 +118,25 @@ class ETLOrchestrator:
             if load_strategy == "stream":
                 uri_template = source_config["data_uri_template"]
                 logger.info(f"Using 'stream' strategy for dataset '{dataset_name}'.")
-                parquet_urls = get_remote_dataset_urls(
+                parquet_uris = get_remote_dataset_urls(
                     uri_template, self.version, dataset_name
                 )
-                if not parquet_urls:
+                if not parquet_uris:
                     logger.warning(f"No remote files found for {dataset_name}, skipping.")
                     return f"Skipped: {dataset_name} - No files found."
 
                 # Verify checksums for all remote files before processing.
                 verify_remote_dataset(
-                    remote_urls=parquet_urls,
+                    remote_urls=parquet_uris,
                     dataset=dataset_name,
                     checksum_manifest=checksum_manifest,
                     max_workers=max_workers,
                 )
 
-                schema = get_remote_schema(parquet_urls)
+                schema = get_remote_schema(parquet_uris)
                 loader.prepare_staging_table(staging_table_name, schema)
                 row_count = loader.bulk_load_native(
-                    staging_table_name, parquet_urls, schema
+                    staging_table_name, parquet_uris, schema
                 )
 
             else: # 'download' strategy
@@ -154,14 +154,14 @@ class ETLOrchestrator:
                     )
 
                     # Still use the new loader functions, but with local file paths
-                    local_urls = [f"file://{p}" for p in sorted(parquet_path.glob("*.parquet"))]
-                    if not local_urls:
+                    parquet_uris = [f"file://{p}" for p in sorted(parquet_path.glob("*.parquet"))]
+                    if not parquet_uris:
                         logger.warning(f"No local files found for {dataset_name}, skipping.")
                         return f"Skipped: {dataset_name} - No files found."
 
-                    schema = get_remote_schema(local_urls)
+                    schema = get_remote_schema(parquet_uris)
                     loader.prepare_staging_table(staging_table_name, schema)
-                    row_count = loader.bulk_load_native(staging_table_name, local_urls, schema)
+                    row_count = loader.bulk_load_native(staging_table_name, parquet_uris, schema)
 
             # Based on the load type, choose the finalization strategy
             if self.load_type == "full-refresh":

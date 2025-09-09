@@ -1,0 +1,107 @@
+# Default configuration for the Open Targets data loader.
+# Users can override these settings by creating their own config.toml.
+
+[execution]
+# The number of parallel threads to use for downloading and processing datasets.
+# A value of 1 means sequential processing.
+max_workers = 4
+
+[logging]
+# Set to true to output logs in a structured JSON format.
+# This can be overridden by the --json-logs flag in the CLI.
+json_format = false
+
+[database]
+# The name of the database backend to use.
+# This must match an entry point in the 'py_load_opentargets.backends' group.
+backend = "postgres"
+# Separator to use when creating column names for flattened struct fields.
+# e.g., 'ancestors' struct with 'id' field becomes 'ancestors_id'.
+flatten_separator = "_"
+
+[source]
+# The active data source provider.
+# Can be "gcs_ftp" for the public Open Targets sources or "s3" for a private mirror.
+provider = "gcs_ftp"
+
+# Configuration for the default Google Cloud Storage and FTP sources.
+[source.gcs_ftp]
+version_discovery_uri = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/"
+checksum_uri_template = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/{version}/"
+# This template points to the directory containing all dataset directories.
+dataset_discovery_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/"
+# Note: The 'data_uri_template' is used for streaming/remote operations,
+# while 'data_download_uri_template' could be different if downloads should
+# come from a different source (e.g. GCS for speed). If download template is
+# missing, it falls back to the main data_uri_template.
+data_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
+data_download_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
+
+# Configuration for using a private S3 bucket as the data source.
+# To use this, set 'provider = "s3"' above.
+# You must also install the S3 dependency: pip install .[s3]
+# Your environment must be configured with AWS credentials.
+[source.s3]
+version_discovery_uri = "s3://your-opentargets-bucket/platform/"
+checksum_uri_template = "s3://your-opentargets-bucket/platform/{version}/"
+dataset_discovery_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/"
+data_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
+data_download_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
+
+
+# Definitions for each dataset to be loaded.
+# Each dataset needs a 'primary_key' list for the merge (UPSERT) operation.
+# An optional 'final_table_name' can be provided to override the default,
+# which is the dataset name itself (with '-' replaced by '_').
+[datasets]
+
+[datasets.targets]
+primary_key = ["id"]
+# The 'schema_overrides' table provides fine-grained control over how columns
+# are processed and mapped to the database schema.
+[datasets.targets.schema_overrides]
+  # For the 'id' column, rename it to 'target_id' in the final table.
+  id = { rename = "target_id" }
+  # The 'tep' column is a struct. 'action = "flatten"' will expand its
+  # sub-fields (e.g., 'uri', 'name') into new columns ('tep_uri', 'tep_name').
+  tep = { action = "flatten" }
+  # 'genomicLocation' is also a struct to be flattened.
+  genomicLocation = { action = "flatten" }
+  # 'obsoleteTerms' is an array of structs. 'action = "json"' will serialize
+  # the entire array into a single JSONB column for flexible querying.
+  obsoleteTerms = { action = "json" }
+
+[datasets.diseases]
+primary_key = ["id"]
+
+[datasets.drugs]
+# The 'id' column for drugs is the ChEMBL ID.
+primary_key = ["id"]
+
+[datasets.evidence]
+# Each evidence string has a unique ID.
+primary_key = ["id"]
+
+[datasets.molecule]
+primary_key = ["id"]
+final_table_name = "molecule"
+
+[datasets.mousePhenotypes]
+primary_key = ["targetId", "diseaseId"]
+final_table_name = "mouse_phenotypes"
+
+[datasets.associationByDatasourceDirect]
+primary_key = ["targetId", "diseaseId", "datasourceId"]
+final_table_name = "association_direct_by_datasource"
+
+[datasets.associationByDatasourceIndirect]
+primary_key = ["targetId", "diseaseId", "datasourceId"]
+final_table_name = "association_indirect_by_datasource"
+
+[datasets.associationByOverallDirect]
+primary_key = ["targetId", "diseaseId"]
+final_table_name = "association_direct_overall"
+
+[datasets.associationByOverallIndirect]
+primary_key = ["targetId", "diseaseId"]
+final_table_name = "association_indirect_overall"

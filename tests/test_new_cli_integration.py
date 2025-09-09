@@ -1,6 +1,7 @@
 import pytest
 import os
 import psycopg
+from unittest.mock import MagicMock
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pathlib import Path
@@ -278,3 +279,63 @@ def test_list_versions_command(monkeypatch, test_config):
     assert "- 22.04" in result.output
     assert "- 22.02" in result.output
     assert "- 21.11" in result.output
+
+
+def test_validate_command_success(monkeypatch, test_config, db_conn_str):
+    """
+    Tests the `validate` command when all checks are expected to succeed.
+    """
+    # Mock the validation service to return success for all checks
+    mock_results = {
+        "Database Connection": {"success": True, "message": "DB good"},
+        "Data Source Connection": {"success": True, "message": "Source good"},
+        "Dataset Definitions": {"success": True, "message": "Datasets good"},
+    }
+    mock_validator_instance = MagicMock()
+    mock_validator_instance.run_all_checks.return_value = mock_results
+    mock_validator_class = MagicMock(return_value=mock_validator_instance)
+    monkeypatch.setattr("py_load_opentargets.cli.ValidationService", mock_validator_class)
+
+    runner = CliRunner()
+    args = [
+        "--config", str(test_config),
+        "validate",
+    ]
+
+    result = runner.invoke(cli, args, catch_exceptions=False, env={"DB_CONN_STR": db_conn_str})
+
+    assert result.exit_code == 0
+    assert "[SUCCESS] Database Connection: DB good" in result.output
+    assert "[SUCCESS] Data Source Connection: Source good" in result.output
+    assert "[SUCCESS] Dataset Definitions: Datasets good" in result.output
+    assert "All checks passed successfully!" in result.output
+
+
+def test_validate_command_failure(monkeypatch, test_config):
+    """
+    Tests the `validate` command when one of the checks fails.
+    """
+    # Mock the validation service to return a failure
+    mock_results = {
+        "Database Connection": {"success": False, "message": "DB bad"},
+        "Data Source Connection": {"success": True, "message": "Source good"},
+        "Dataset Definitions": {"success": True, "message": "Datasets good"},
+    }
+    mock_validator_instance = MagicMock()
+    mock_validator_instance.run_all_checks.return_value = mock_results
+    mock_validator_class = MagicMock(return_value=mock_validator_instance)
+    monkeypatch.setattr("py_load_opentargets.cli.ValidationService", mock_validator_class)
+
+    runner = CliRunner()
+    args = [
+        "--config", str(test_config),
+        "validate",
+    ]
+
+    # Don't set DB_CONN_STR to simulate a potential failure cause
+    result = runner.invoke(cli, args, catch_exceptions=True) # Catch abort
+
+    assert result.exit_code != 0 # Should exit with non-zero code on failure
+    assert "[FAILED] Database Connection: DB bad" in result.output
+    assert "[SUCCESS] Data Source Connection: Source good" in result.output
+    assert "Validation failed" in result.output

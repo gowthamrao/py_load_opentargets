@@ -17,26 +17,71 @@ logger = logging.getLogger(__name__)
 class _ParquetStreamer:
     """
     A file-like object that streams multiple Parquet files as a single TSV stream.
-    This class iterates through a list of Parquet file paths (local or remote),
-    processes them with Polars, and streams them as a single, continuous,
-    tab-delimited text stream suitable for PostgreSQL's COPY command.
-    This avoids materializing the entire dataset in memory or on disk as a
-    single CSV file.
+    This class iterates through a list of Parquet file paths, processes them with
+    Polars according to schema transformation rules, and streams them as a single,
+    continuous, tab-delimited text stream suitable for PostgreSQL's COPY command.
     """
 
     def __init__(
         self,
         paths: List[str],
-        schema: pa.Schema,
-        flatten_structs: Optional[List[str]] = None,
-        flatten_separator: str = "_",
+        original_schema: pa.Schema,
+        schema_overrides: Optional[Dict[str, Any]],
+        flatten_separator: str,
     ):
         self._paths = iter(paths)
-        self._original_schema = schema
-        self._flatten_structs = flatten_structs or []
+        self._original_schema = original_schema
+        self._schema_overrides = schema_overrides or {}
         self._flatten_separator = flatten_separator
         self._buffer = io.StringIO()
         self._eof = False
+        self._select_exprs = self._build_polars_expressions()
+
+    def _build_polars_expressions(self) -> List[pl.Expr]:
+        """
+        Builds a list of Polars expressions based on the original schema and schema_overrides.
+        This is done once at initialization.
+        """
+        select_exprs = []
+        for field in self._original_schema:
+            col_name = field.name
+            override = self._schema_overrides.get(col_name, {})
+            action = override.get("action")
+            final_name = override.get("rename", col_name)
+
+            # Case 1: Flatten a struct
+            if action == "flatten" and pa.types.is_struct(field.type):
+                logger.info(f"Rule: Flattening all fields from struct column '{col_name}'.")
+                for sub_field in field.type:
+                    new_col_name = f"{final_name}{self._flatten_separator}{sub_field.name}"
+                    select_exprs.append(
+                        pl.col(col_name).struct.field(sub_field.name).alias(new_col_name)
+                    )
+            # Case 2: Serialize to JSON
+            elif action == "json" or (pa.types.is_struct(field.type) and action != "flatten") or pa.types.is_list(field.type):
+                logger.info(f"Rule: Serializing column '{col_name}' to JSON as '{final_name}'.")
+                # Use the appropriate json_encode method based on the type
+                if pa.types.is_struct(field.type):
+                    expr = pl.col(col_name).struct.json_encode()
+                elif pa.types.is_list(field.type):
+                    # For lists, map_elements passes a Series for each row. We must
+                    # convert it to a list before JSON serialization.
+                    # We use compact separators for efficiency.
+                    expr = pl.col(col_name).map_elements(
+                        lambda s: json.dumps(s.to_list(), separators=(",", ":")),
+                        return_dtype=pl.String,
+                    )
+                else:
+                    # Fallback for other types that might be marked as json
+                    expr = pl.col(col_name).cast(pl.String)
+
+                select_exprs.append(expr.alias(final_name))
+            # Case 3: Simple rename or direct mapping
+            else:
+                logger.info(f"Rule: Mapping column '{col_name}' to '{final_name}'.")
+                select_exprs.append(pl.col(col_name).alias(final_name))
+
+        return select_exprs
 
     def _load_next_file_into_buffer(self):
         """Loads the next parquet file into the in-memory buffer."""
@@ -45,36 +90,7 @@ class _ParquetStreamer:
             logger.info(f"Streaming file for COPY: {next_path}")
 
             lf = pl.scan_parquet(next_path)
-
-            # Prepare data for COPY: handle nested types based on config
-            select_exprs = []
-            for field in self._original_schema:
-                col_name = field.name
-                # If it's a struct and configured to be flattened
-                if pa.types.is_struct(field.type) and col_name in self._flatten_structs:
-                    logger.info(f"Flattening struct column: '{col_name}'")
-                    for sub_field in field.type:
-                        new_col_name = f"{col_name}{self._flatten_separator}{sub_field.name}"
-                        select_exprs.append(
-                            pl.col(col_name).struct.field(sub_field.name).alias(new_col_name)
-                        )
-                # If it's a struct that's not being flattened, serialize to JSON
-                elif pa.types.is_struct(field.type):
-                    logger.debug(f"Serializing struct column to JSON: '{col_name}'")
-                    select_exprs.append(
-                        pl.col(col_name).struct.json_encode().alias(col_name)
-                    )
-                # If it's a list, serialize to JSON
-                elif pa.types.is_list(field.type):
-                    logger.debug(f"Serializing list column to JSON: '{col_name}'")
-                    select_exprs.append(
-                        pl.col(col_name).list.json_encode().alias(col_name)
-                    )
-                # Otherwise, it's a primitive type
-                else:
-                    select_exprs.append(pl.col(col_name))
-
-            lf = lf.select(select_exprs)
+            lf = lf.select(self._select_exprs)
 
             # Reset buffer and write new data into it
             self._buffer.seek(0)
@@ -87,20 +103,16 @@ class _ParquetStreamer:
             self._eof = True
 
     def read(self, size: int = -1) -> str:
-        """
-        Read 'size' bytes from the stream.
-        If the buffer is exhausted, it attempts to load the next file.
-        """
+        """Read 'size' bytes from the stream."""
         if self._eof:
             return ""
 
         data = self._buffer.read(size)
-        while not data and not self._eof:
+        if not data and not self._eof:
             self._load_next_file_into_buffer()
             if self._eof:
                 return ""
             data = self._buffer.read(size)
-
         return data
 
 
@@ -158,29 +170,43 @@ class PostgresLoader(DatabaseLoader):
 
     def _get_transformed_schema(self, original_schema: pa.Schema) -> pa.Schema:
         """
-        Transforms a PyArrow schema by flattening specified struct columns.
+        Transforms a PyArrow schema based on the rules in 'schema_overrides'.
+        This determines the final schema of the database table.
         """
-        flatten_structs = self.dataset_config.get("flatten_structs", [])
+        schema_overrides = self.dataset_config.get("schema_overrides", {})
         flatten_separator = self.dataset_config.get("flatten_separator", "_")
-
         new_fields = []
+
         for field in original_schema:
-            # If it's a struct and configured to be flattened
-            if pa.types.is_struct(field.type) and field.name in flatten_structs:
+            original_name = field.name
+            override = schema_overrides.get(original_name, {})
+            action = override.get("action")
+            final_name = override.get("rename", original_name)
+
+            # Case 1: Flatten a struct
+            if action == "flatten" and pa.types.is_struct(field.type):
                 for sub_field in field.type:
-                    new_name = f"{field.name}{flatten_separator}{sub_field.name}"
+                    new_name = f"{final_name}{flatten_separator}{sub_field.name}"
                     new_fields.append(pa.field(new_name, sub_field.type))
+            # Case 2: Serialize to JSON
+            elif action == "json" or (pa.types.is_struct(field.type) and action != "flatten") or pa.types.is_list(field.type):
+                # Keep the original nested type, but with the new name.
+                # _pyarrow_to_postgres_type will map this to JSONB.
+                new_fields.append(field.with_name(final_name))
+            # Case 3: Simple rename or direct mapping
             else:
-                new_fields.append(field)
+                new_fields.append(field.with_name(final_name))
 
         return pa.schema(new_fields)
 
-    def _generate_create_table_sql(self, table_name: str, schema: pa.Schema) -> str:
-        """Generates a CREATE TABLE SQL statement from a (potentially transformed) PyArrow schema."""
+    def _generate_create_table_sql(self, table_name: str, schema: pa.Schema, schema_overrides: dict) -> str:
+        """Generates a CREATE TABLE SQL statement from a transformed PyArrow schema."""
         columns = []
         for field in schema:
             col_name = field.name
-            col_type = self._pyarrow_to_postgres_type(field.type)
+            # Check for a user-defined type override first
+            override = schema_overrides.get(field.name, {}) # Note: This lookup is on the final name
+            col_type = override.get("type", self._pyarrow_to_postgres_type(field.type))
             columns.append(f'"{col_name}" {col_type}')
 
         cols_sql = ",\n  ".join(columns)
@@ -193,8 +219,9 @@ class PostgresLoader(DatabaseLoader):
         """
         logger.info(f"Preparing staging table '{table_name}'...")
 
+        schema_overrides = self.dataset_config.get("schema_overrides", {})
         transformed_schema = self._get_transformed_schema(schema)
-        create_sql = self._generate_create_table_sql(table_name, transformed_schema)
+        create_sql = self._generate_create_table_sql(table_name, transformed_schema, schema_overrides)
 
         logger.info(f"Dropping table '{table_name}' if it exists.")
         self.cursor.execute(f"DROP TABLE IF EXISTS {table_name};")
@@ -207,8 +234,7 @@ class PostgresLoader(DatabaseLoader):
     def bulk_load_native(self, table_name: str, parquet_paths: List[str], schema: pa.Schema) -> int:
         """
         Loads data from a list of Parquet files into a PostgreSQL table using a
-        single, streamed, native COPY command, handling data transformations like
-        flattening on the fly.
+        single, streamed, native COPY command, handling data transformations on the fly.
         """
         logger.info(f"Starting single-stream bulk load for '{table_name}'.")
 
@@ -216,7 +242,7 @@ class PostgresLoader(DatabaseLoader):
             logger.warning(f"No .parquet files provided. Skipping bulk load.")
             return 0
 
-        flatten_structs = self.dataset_config.get("flatten_structs", [])
+        schema_overrides = self.dataset_config.get("schema_overrides", {})
         flatten_separator = self.dataset_config.get("flatten_separator", "_")
 
         # The schema of the data stream must match the table schema
@@ -226,8 +252,8 @@ class PostgresLoader(DatabaseLoader):
 
         streamer = _ParquetStreamer(
             paths=parquet_paths,
-            schema=schema, # Streamer needs original schema to read files
-            flatten_structs=flatten_structs,
+            original_schema=schema,
+            schema_overrides=schema_overrides,
             flatten_separator=flatten_separator,
         )
 

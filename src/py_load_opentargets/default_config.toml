@@ -37,9 +37,19 @@ data_download_uri_template = "gcs://open-targets/platform/{version}/output/etl/p
 
 [datasets.targets]
 primary_key = ["id"]
-# A list of struct columns to flatten. Each sub-field in the struct
-# will become a new column, named 'struct_name_separator_field_name'.
-flatten_structs = ["genomicLocation", "tep"]
+# The 'schema_overrides' table provides fine-grained control over how columns
+# are processed and mapped to the database schema.
+[datasets.targets.schema_overrides]
+  # For the 'id' column, rename it to 'target_id' in the final table.
+  id = { rename = "target_id" }
+  # The 'tep' column is a struct. 'action = "flatten"' will expand its
+  # sub-fields (e.g., 'uri', 'name') into new columns ('tep_uri', 'tep_name').
+  tep = { action = "flatten" }
+  # 'genomicLocation' is also a struct to be flattened.
+  genomicLocation = { action = "flatten" }
+  # 'obsoleteTerms' is an array of structs. 'action = "json"' will serialize
+  # the entire array into a single JSONB column for flexible querying.
+  obsoleteTerms = { action = "json" }
 
 [datasets.diseases]
 primary_key = ["id"]

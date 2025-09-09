@@ -141,7 +141,8 @@ flatten_separator = "_"
 [datasets.test_data_flat]
 primary_key = ["id"]
 final_table_name = "test_data_flat"
-flatten_structs = ["location"]
+[datasets.test_data_flat.schema_overrides]
+  location = { action = "flatten" }
 
 [execution]
 max_workers = 1
@@ -205,7 +206,7 @@ def test_cli_flattening(db_conn, db_conn_str, mock_data_acquisition, test_config
     result = runner.invoke(cli, args, catch_exceptions=False, env={"DB_CONN_STR": db_conn_str})
 
     assert result.exit_code == 0, f"CLI command failed with output:\n{result.output}"
-    assert "Flattening struct column: 'location'" in result.output
+    assert "Rule: Flattening all fields from struct column 'location'" in result.output
     assert "Successfully processed dataset 'test_data_flat'" in result.output
 
     # Verify the final table content
@@ -216,7 +217,13 @@ def test_cli_flattening(db_conn, db_conn_str, mock_data_acquisition, test_config
 
     # The 'other_nested' column should be valid JSON
     import json
-    assert final_data == [
+    # psycopg may return JSONB as a string or a dict depending on version/context.
+    # Handle both cases for robust testing.
+    parsed_data = [
+        (id_val, loc_chrom, loc_start, json.loads(other_nested) if isinstance(other_nested, str) else other_nested)
+        for id_val, loc_chrom, loc_start, other_nested in final_data
+    ]
+    assert parsed_data == [
         (1, '1', 100, {'info': 'foo'}),
         (2, '2', 200, {'info': 'bar'})
     ]

@@ -18,10 +18,10 @@ def test_pyarrow_to_postgres_type_mapping(loader):
     assert loader._pyarrow_to_postgres_type(pa.struct([])) == "JSONB"
     assert loader._pyarrow_to_postgres_type(pa.list_(pa.string())) == "JSONB"
 
-def test_get_transformed_schema_no_flattening(loader, mocker):
+def test_get_transformed_schema_default_json_conversion(loader, mocker):
     """
-    Tests that the schema transformation returns the original schema when no
-    flattening is configured.
+    Tests that with no overrides, nested types are kept as nested types in the
+    transformed schema, so they can be mapped to JSONB.
     """
     mocker.patch('psycopg.connect')
     original_schema = pa.schema([
@@ -29,16 +29,15 @@ def test_get_transformed_schema_no_flattening(loader, mocker):
         pa.field('nested_data', pa.struct([pa.field('a', pa.string())]))
     ])
 
-    # Connect with no special config
     loader.connect("dummy_conn_str", dataset_config={})
-
     transformed_schema = loader._get_transformed_schema(original_schema)
 
+    # With no overrides, the schema should be identical.
     assert transformed_schema == original_schema
 
-def test_get_transformed_schema_with_flattening(loader, mocker):
+def test_get_transformed_schema_with_overrides(loader, mocker):
     """
-    Tests that the schema transformation correctly flattens a specified struct.
+    Tests that schema_overrides for 'flatten' and 'rename' are correctly applied.
     """
     mocker.patch('psycopg.connect')
     original_schema = pa.schema([
@@ -51,15 +50,19 @@ def test_get_transformed_schema_with_flattening(loader, mocker):
     ])
 
     config = {
-        "flatten_structs": ["data_to_flatten"],
+        "schema_overrides": {
+            "id": {"rename": "renamed_id"},
+            "data_to_flatten": {"action": "flatten"}
+        },
         "flatten_separator": "__"
     }
     loader.connect("dummy_conn_str", dataset_config=config)
 
     transformed_schema = loader._get_transformed_schema(original_schema)
 
+    # The 'other_nested' struct should be preserved in the schema, not converted to string.
     expected_schema = pa.schema([
-        pa.field('id', pa.int64()),
+        pa.field('renamed_id', pa.int64()),
         pa.field('data_to_flatten__field_a', pa.string()),
         pa.field('data_to_flatten__field_b', pa.int32()),
         pa.field('other_nested', pa.struct([pa.field('c', pa.string())]))
@@ -74,8 +77,7 @@ def test_generate_create_table_sql_simple(loader):
         pa.field('description', pa.string())
     ])
 
-    # No config needed for this method as it operates on the schema passed to it
-    sql = loader._generate_create_table_sql("public.my_table", schema)
+    sql = loader._generate_create_table_sql("public.my_table", schema, schema_overrides={})
 
     expected_sql = """CREATE TABLE public.my_table (
   "id" BIGINT,
@@ -88,15 +90,14 @@ def test_generate_create_table_sql_with_flattened_schema(loader):
     Tests generating a CREATE TABLE statement for a schema that has already
     been transformed (flattened).
     """
-    # This schema would be the *output* of _get_transformed_schema
     flattened_schema = pa.schema([
         pa.field('id', pa.int64()),
         pa.field('location_chromosome', pa.string()),
         pa.field('location_start', pa.int64()),
-        pa.field('some_other_data', pa.list_(pa.string())) # This should become JSONB
+        pa.field('some_other_data', pa.list_(pa.string()))
     ])
 
-    sql = loader._generate_create_table_sql("staging.flat_table", flattened_schema)
+    sql = loader._generate_create_table_sql("staging.flat_table", flattened_schema, schema_overrides={})
 
     expected_sql = """CREATE TABLE staging.flat_table (
   "id" BIGINT,

@@ -1,0 +1,5 @@
+site_name: py-load-opentargets
+theme:
+  name: material
+repo_url: https://github.com/ohdsi/py-load-opentargets
+repo_name: ohdsi/py-load-opentargets

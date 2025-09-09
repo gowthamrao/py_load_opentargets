@@ -8,6 +8,7 @@ This tool allows you to download and load the entire Open Targets platform datas
 
 - **Configuration-Driven**: Control the entire loading process with a simple `config.toml` file.
 - **Extensible**: Supports multiple database backends through a pluggable system (currently supports PostgreSQL).
+- **Multi-Source**: Natively handles data from GCS, FTP, and S3-compatible storage using a unified interface.
 - **High Performance**: Uses native database bulk loading (`COPY` for PostgreSQL) for maximum speed.
 - **Idempotent**: Safely re-run loads for the same version without creating duplicate data.
 - **Schema-Aware**: Automatically creates tables, infers schemas, and handles schema evolution between releases.

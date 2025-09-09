@@ -29,6 +29,20 @@ checksum_uri_template = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/
 data_download_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
 
 
+# --- S3 Data Source Example ---
+# To use a private S3 bucket as the data source, comment out the default URIs
+# above and uncomment the lines below.
+#
+# You must also install the S3 dependency: pip install .[s3]
+#
+# Your environment must be configured with AWS credentials (e.g., via environment
+# variables AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY).
+#
+# version_discovery_uri = "s3://your-opentargets-bucket/platform/"
+# checksum_uri_template = "s3://your-opentargets-bucket/platform/{version}/"
+# data_download_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
+
+
 # Definitions for each dataset to be loaded.
 # Each dataset needs a 'primary_key' list for the merge (UPSERT) operation.
 # An optional 'final_table_name' can be provided to override the default,

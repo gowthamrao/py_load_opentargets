@@ -13,6 +13,7 @@ from .data_acquisition import (
     get_checksum_manifest,
     get_remote_dataset_urls,
     get_remote_schema,
+    verify_remote_dataset,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,14 @@ class ETLOrchestrator:
                 if not parquet_urls:
                     logger.warning(f"No remote files found for {dataset_name}, skipping.")
                     return f"Skipped: {dataset_name} - No files found."
+
+                # Verify checksums for all remote files before processing.
+                verify_remote_dataset(
+                    remote_urls=parquet_urls,
+                    dataset=dataset_name,
+                    checksum_manifest=checksum_manifest,
+                    max_workers=max_workers,
+                )
 
                 schema = get_remote_schema(parquet_urls)
                 loader.prepare_staging_table(staging_table_name, schema)

@@ -379,6 +379,74 @@ class PostgresLoader(DatabaseLoader):
         self.conn.commit()
         logger.info("All indexes recreated successfully.")
 
+    def get_foreign_keys(self, table_name: str) -> List[Dict[str, str]]:
+        """
+        Retrieves definitions for all foreign key constraints on a table.
+        """
+        schema, table = table_name.split('.')
+        logger.info(f"Retrieving foreign key definitions for table '{table_name}'.")
+
+        # This query gets the name and the full definition of foreign key constraints
+        # that originate from the specified table.
+        sql_query = """
+            SELECT
+                con.conname AS name,
+                pg_get_constraintdef(con.oid) AS ddl
+            FROM
+                pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE
+                nsp.nspname = %s AND rel.relname = %s AND con.contype = 'f';
+        """
+        self.cursor.execute(sql_query, (schema, table))
+        foreign_keys = [{"name": row[0], "ddl": row[1]} for row in self.cursor.fetchall()]
+
+        if foreign_keys:
+            logger.info(f"Found {len(foreign_keys)} foreign keys: {[fk['name'] for fk in foreign_keys]}")
+        else:
+            logger.info("No foreign keys found.")
+        return foreign_keys
+
+    def drop_foreign_keys(self, table_name: str, foreign_keys: List[Dict[str, str]]) -> None:
+        """
+        Drops a list of foreign key constraints from a table.
+        """
+        if not foreign_keys:
+            return
+        logger.info(f"Dropping {len(foreign_keys)} foreign keys from {table_name} to improve merge performance...")
+        table_ident = sql.Identifier(*table_name.split('.'))
+        for fk in foreign_keys:
+            fk_name = fk['name']
+            logger.info(f"Dropping foreign key: {fk_name}")
+            # Use sql.Identifier for safe quoting of constraint name
+            self.cursor.execute(sql.SQL("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {fk_name};").format(
+                table=table_ident,
+                fk_name=sql.Identifier(fk_name)
+            ))
+        self.conn.commit()
+
+    def recreate_foreign_keys(self, table_name: str, foreign_keys: List[Dict[str, str]]) -> None:
+        """
+        Recreates a list of foreign key constraints on a table from their DDL definitions.
+        """
+        if not foreign_keys:
+            return
+        logger.info(f"Recreating {len(foreign_keys)} foreign keys on {table_name}...")
+        table_ident = sql.Identifier(*table_name.split('.'))
+        for fk in foreign_keys:
+            logger.info(f"Recreating foreign key '{fk['name']}' using DDL: {fk['ddl']}")
+            # The DDL is from pg_get_constraintdef, so it's considered safe.
+            # It comes in the form "FOREIGN KEY (col) REFERENCES other_table(other_col)"
+            # So we wrap it in ALTER TABLE ... ADD CONSTRAINT ...
+            self.cursor.execute(sql.SQL("ALTER TABLE {table} ADD CONSTRAINT {fk_name} {ddl};").format(
+                table=table_ident,
+                fk_name=sql.Identifier(fk['name']),
+                ddl=sql.SQL(fk['ddl'])
+            ))
+        self.conn.commit()
+        logger.info("All foreign keys recreated successfully.")
+
     def _get_table_columns(self, table_name: str) -> list[str]:
         """Retrieves a list of column names for a given table."""
         schema, table = table_name.split('.')

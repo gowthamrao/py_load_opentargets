@@ -172,20 +172,31 @@ class ETLOrchestrator:
             else:
                 logger.info(f"Using 'delta' merge strategy for final table '{final_table_full_name}'.")
                 indexes = []
+                foreign_keys = []
                 try:
                     if loader.table_exists(final_table_full_name):
                         loader.align_final_table_schema(
                             staging_table_name, final_table_full_name
                         )
+                        # Get and drop FKs first
+                        foreign_keys = loader.get_foreign_keys(final_table_full_name)
+                        if foreign_keys:
+                            loader.drop_foreign_keys(final_table_full_name, foreign_keys)
+
+                        # Get and drop indexes
                         indexes = loader.get_table_indexes(final_table_full_name)
                         if indexes:
                             loader.drop_indexes(indexes)
+
                     loader.execute_merge_strategy(
                         staging_table_name, final_table_full_name, primary_keys
                     )
                 finally:
+                    # Recreate constraints in reverse order: indexes, then FKs
                     if indexes:
                         loader.recreate_indexes(indexes)
+                    if foreign_keys:
+                        loader.recreate_foreign_keys(final_table_full_name, foreign_keys)
 
             end_time = time.time()
             loader.update_metadata(

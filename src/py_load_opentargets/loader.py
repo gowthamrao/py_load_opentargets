@@ -24,6 +24,36 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
+    def get_foreign_keys(self, table_name: str) -> List[Dict[str, str]]:
+        """
+        Retrieve definitions for all foreign key constraints on a table.
+
+        :param table_name: The fully qualified name of the table.
+        :return: A list of dicts, where each dict has 'name' and 'ddl' for a constraint.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def drop_foreign_keys(self, table_name: str, foreign_keys: List[Dict[str, str]]) -> None:
+        """
+        Drops a list of foreign key constraints.
+
+        :param table_name: The fully qualified name of the table.
+        :param foreign_keys: A list of FK definition dicts, e.g., from get_foreign_keys.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def recreate_foreign_keys(self, table_name: str, foreign_keys: List[Dict[str, str]]) -> None:
+        """
+        Recreates a list of foreign key constraints from their DDL definitions.
+
+        :param table_name: The fully qualified name of the table.
+        :param foreign_keys: A list of FK definition dicts, e.g., from get_foreign_keys.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
     def cleanup(self) -> None:
         """
         Perform cleanup operations, like closing connections.

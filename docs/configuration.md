@@ -40,6 +40,37 @@ This section tells the loader where to find the Open Targets data releases.
 
 ---
 
+### Using S3 as a Data Source
+
+The loader can be configured to use any `fsspec`-compatible backend, including Amazon S3. To use data stored in a private or public S3 bucket, follow these steps:
+
+1.  **Install S3 support:**
+    You must install the package with the `s3` extra, which includes the `s3fs` library.
+    ```bash
+    pip install py_load_opentargets[s3]
+    ```
+
+2.  **Configure AWS Credentials:**
+    Your environment must be configured with AWS credentials. The most common method is to set the `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_SESSION_TOKEN` environment variables.
+
+3.  **Update your `config.toml`:**
+    In your configuration file, you need to change the `[source]` URIs to point to your S3 bucket. You can comment out the default URIs and replace them with your S3 paths.
+
+    ```toml
+    [source]
+    # Default URIs (comment these out)
+    # version_discovery_uri = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/"
+    # checksum_uri_template = "ftp://ftp.ebi.ac.uk/pub/databases/opentargets/platform/{version}/"
+    # data_download_uri_template = "gcs://open-targets/platform/{version}/output/etl/parquet/{dataset_name}/"
+
+    # S3 URIs (uncomment and edit these)
+    version_discovery_uri = "s3://your-opentargets-bucket/platform/"
+    checksum_uri_template = "s3://your-opentargets-bucket/platform/{version}/"
+    data_download_uri_template = "s3://your-opentargets-bucket/platform/{version}/output/etl/parquet/{dataset_name}/"
+    ```
+
+---
+
 ## `[database]`
 
 This section controls database-specific behavior.

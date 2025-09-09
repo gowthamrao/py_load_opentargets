@@ -104,8 +104,10 @@ def mock_data_acquisition(monkeypatch, tmp_path: Path):
             "output/etl/parquet/test_data_flat/data.parquet": "dummy_checksum_3",
         }
 
-    # list_available_versions is called in the CLI module to determine the latest version
+    # list_available_versions is called in the CLI module and the validator module.
+    # We must patch it in both places where it is imported.
     monkeypatch.setattr("py_load_opentargets.cli.list_available_versions", mock_list_versions)
+    monkeypatch.setattr("py_load_opentargets.validator.list_available_versions", mock_list_versions)
     # These two are called from the orchestrator
     monkeypatch.setattr("py_load_opentargets.orchestrator.download_dataset", mock_download)
     monkeypatch.setattr("py_load_opentargets.orchestrator.get_checksum_manifest", mock_get_checksum_manifest)
@@ -119,7 +121,8 @@ def mock_plain_logging(monkeypatch):
     Mocks the setup_logging function to use a simple, non-JSON format,
     which is easier to assert against in CLI tests.
     """
-    def setup_plain_logging():
+    # The mock needs to accept the 'json_format' argument, even if it doesn't use it.
+    def setup_plain_logging(json_format=False):
         # A much simpler logger for testing purposes.
         # `force=True` is needed to override any existing logger configuration.
         logging.basicConfig(level=logging.INFO, format='%(message)s', force=True)
@@ -366,6 +369,83 @@ def test_load_command_fails_on_invalid_config(
 
     # 3. Assert that the main orchestrator logic was NOT called
     mock_orchestrator_run.assert_not_called()
+
+
+import json
+
+def test_cli_json_logging_flag(db_conn_str, mock_data_acquisition, test_config):
+    """
+    Tests that the --json-logs flag correctly enables JSON logging output.
+    """
+    runner = CliRunner()
+    args = [
+        "--config", str(test_config),
+        "--json-logs", # Explicitly enable JSON logging
+        "load",
+        "--skip-confirmation",
+        "test_data_one",
+    ]
+
+    result = runner.invoke(cli, args, catch_exceptions=False, env={"DB_CONN_STR": db_conn_str})
+
+    assert result.exit_code == 0
+    # Check that the first line of output is a valid JSON log entry
+    first_log_line = result.output.splitlines()[0]
+    try:
+        log_json = json.loads(first_log_line)
+        assert "asctime" in log_json
+        assert "name" in log_json
+        assert "levelname" in log_json
+        assert "message" in log_json
+        assert log_json["message"] == "Structured JSON logging initialized."
+    except json.JSONDecodeError:
+        pytest.fail("The first line of output was not a valid JSON string.")
+
+
+@pytest.fixture
+def test_config_json_log(tmp_path: Path) -> Path:
+    """Creates a temporary config.toml file with JSON logging enabled."""
+    config_content = """
+[source]
+version_discovery_uri = "ftp://fake.host/fake/path/"
+data_download_uri_template = "gcs://fake-bucket/{version}/output/etl/parquet/{dataset_name}/"
+
+[logging]
+json_format = true # Enable via config
+
+[datasets.test_data_one]
+primary_key = ["id"]
+
+[execution]
+max_workers = 1
+"""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(config_content)
+    return config_file
+
+
+def test_cli_json_logging_from_config(db_conn_str, mock_data_acquisition, test_config_json_log):
+    """
+    Tests that setting 'json_format = true' in the config file enables JSON logging.
+    """
+    runner = CliRunner()
+    args = [
+        "--config", str(test_config_json_log),
+        "load",
+        "--skip-confirmation",
+        "test_data_one",
+    ]
+
+    result = runner.invoke(cli, args, catch_exceptions=False, env={"DB_CONN_STR": db_conn_str})
+
+    assert result.exit_code == 0
+    # Check that the output is JSON formatted
+    first_log_line = result.output.splitlines()[0]
+    try:
+        log_json = json.loads(first_log_line)
+        assert log_json["message"] == "Structured JSON logging initialized."
+    except json.JSONDecodeError:
+        pytest.fail("The first line of output was not a valid JSON string, even when configured via file.")
 
 
 def test_validate_command_failure(monkeypatch, test_config):

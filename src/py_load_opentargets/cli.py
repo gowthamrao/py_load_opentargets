@@ -12,16 +12,22 @@ from .validator import ValidationService
 logger = logging.getLogger(__name__)
 
 
+from .logging_utils import setup_logging
+
 @click.group()
 @click.option('--config', 'config_path', type=click.Path(exists=True), help='Path to a custom config.toml file.')
+@click.option('--json-logs', is_flag=True, help='Output logs in JSON format. Overrides config file setting.')
 @click.pass_context
-def cli(ctx, config_path):
+def cli(ctx, config_path, json_logs):
     """A CLI tool to download and load Open Targets data."""
-    setup_logging()
     ctx.ensure_object(dict)
-    # Load config and attach it to the click context
-    # This also populates the new 'database' section with defaults if not present
-    ctx.obj['CONFIG'] = load_config(config_path)
+    config = load_config(config_path)
+    ctx.obj['CONFIG'] = config
+
+    # Setup logging
+    # The CLI flag --json-logs takes precedence over the config file setting.
+    use_json_logging = json_logs or config.get('logging', {}).get('json_format', False)
+    setup_logging(json_format=use_json_logging)
 
 
 @cli.command(name="list-versions")

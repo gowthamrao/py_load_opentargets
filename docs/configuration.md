@@ -97,23 +97,50 @@ For each dataset, the following keys are available:
   - The name of the final table in the database.
   - If not provided, it defaults to the dataset name (e.g., `associationByOverallDirect` becomes `associationbyoveralldirect`). It's often a good idea to specify a cleaner name.
 
-- **`flatten_structs`** (list of strings, optional)
-  - A list of column names of type `struct` that you want to flatten into top-level columns.
-  - Any `struct` column *not* listed here will be serialized and loaded into a `JSONB` column.
-  - All `list` columns are always loaded as `JSONB`.
+- **`schema_overrides`** (table, optional)
+  - This is a powerful feature that gives you fine-grained control over how each column is transformed and loaded into the database.
+  - It is a table where each key is the **original column name** from the Parquet file.
+  - The value for each key is another table defining the desired transformations.
 
-### Example Dataset Configuration
+The following transformations can be defined for a column:
+
+- **`rename`** (string): Renames the column to the provided string in the final database table.
+- **`action`** (string): Specifies a transformation action.
+  - **`"flatten"`**: For `struct` columns. Expands the struct's sub-fields into new top-level columns. For example, a struct `location` with sub-field `pos` becomes a database column `location_pos`.
+  - **`"json"`**: For `struct` or `list` columns. Serializes the entire column into a single `JSONB` field in the database. This is the default behavior for nested types if no other action is specified.
+- **`type`** (string): Overrides the default data type mapping and forces the column to be created with the specified SQL type (e.g., `"VARCHAR(100)"`).
+
+### Schema Overrides: Examples
+
+#### Example 1: Renaming and Flattening
 
 ```toml
-[datasets.molecule]
+[datasets.targets]
 primary_key = ["id"]
-final_table_name = "drugs"
-# The 'drug' column is a struct. We want to flatten it.
-flatten_structs = ["drug"]
 
+# Use schema_overrides to control transformations
+[datasets.targets.schema_overrides]
+  # Rename the 'id' column to 'target_id'
+  id = { rename = "target_id" }
+
+  # Flatten the 'genomicLocation' struct into top-level columns
+  # (e.g., 'genomicLocation_chromosome', 'genomicLocation_start', etc.)
+  genomicLocation = { action = "flatten" }
+```
+
+#### Example 2: Storing Nested Data as JSON
+
+For highly complex or deeply nested columns, storing them as `JSONB` can be the best strategy.
+
+```toml
 [datasets.evidence]
 primary_key = ["id"]
-# Here, we don't specify flatten_structs, so any nested columns
-# will be loaded as JSONB, which might be desirable for complex,
-# deeply nested data like in the evidence dataset.
+
+[datasets.evidence.schema_overrides]
+  # Explicitly store the 'disease' struct as a single JSONB column
+  disease = { action = "json" }
+
+  # The 'urls' column is a list of structs. Store it as JSONB.
+  urls = { action = "json" }
 ```
+If a `struct` or `list` column has no override rule, it will default to the `"json"` action.

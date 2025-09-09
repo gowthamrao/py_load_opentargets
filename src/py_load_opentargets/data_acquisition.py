@@ -95,6 +95,9 @@ def get_checksum_manifest(version: str, checksum_uri_template: str) -> Dict[str,
     :return: A dictionary mapping file paths to their expected SHA1 checksums.
     """
     release_uri = checksum_uri_template.format(version=version)
+    # Ensure the URI has a trailing slash for correct path joining
+    if not release_uri.endswith('/'):
+        release_uri += '/'
     manifest_path = f"{release_uri}release_data_integrity"
     checksum_for_manifest_path = f"{manifest_path}.sha1"
     logger.info(f"Downloading checksum manifest from {release_uri}")

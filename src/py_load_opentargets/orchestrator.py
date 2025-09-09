@@ -75,6 +75,7 @@ class ETLOrchestrator:
         max_workers: int,
         checksum_manifest: Dict[str, str],
         load_strategy: str,
+        source_config: Dict[str, Any],
     ):
         """
         Processes a single dataset. Designed to be called in a separate thread.
@@ -86,7 +87,6 @@ class ETLOrchestrator:
         try:
             # Get configs
             all_defined_datasets = self.config["datasets"]
-            source_config = self.config["source"]
             database_config = self.config.get("database", {})
             dataset_config = all_defined_datasets[dataset_name]
 
@@ -143,7 +143,7 @@ class ETLOrchestrator:
                 logger.info(f"Using 'download' strategy for dataset '{dataset_name}'.")
                 with tempfile.TemporaryDirectory() as temp_dir_str:
                     temp_dir = Path(temp_dir_str)
-                    download_uri_template = source_config['data_download_uri_template']
+                    download_uri_template = source_config.get('data_download_uri_template') or source_config['data_uri_template']
                     parquet_path = download_dataset(
                         download_uri_template,
                         self.version,
@@ -228,12 +228,18 @@ class ETLOrchestrator:
         logger.info("--- Starting Open Targets ETL Process ---")
         logger.info(f"Selected datasets: {', '.join(self.datasets_to_process)}")
 
-        source_config = self.config["source"]
         execution_config = self.config.get("execution", {})
         max_workers = execution_config.get("max_workers", 1)
         load_strategy = execution_config.get("load_strategy", "download")
         db_conn_str = os.getenv("DB_CONN_STR")
 
+        # Determine the active source configuration based on the provider
+        source_provider = self.config["source"].get("provider", "gcs_ftp")
+        source_config = self.config["source"].get(source_provider)
+        if not source_config:
+            raise ValueError(f"Configuration for source provider '{source_provider}' not found.")
+
+        logger.info(f"Using source provider: '{source_provider}'")
         logger.info(f"Using load strategy: '{load_strategy}'")
 
         if not db_conn_str:
@@ -273,6 +279,7 @@ class ETLOrchestrator:
                         max_workers,
                         self.checksum_manifest,
                         load_strategy,
+                        source_config,
                     ): name
                     for name in self.datasets_to_process
                 }
@@ -293,7 +300,7 @@ class ETLOrchestrator:
             logger.info("Running sequentially with a single worker.")
             for dataset in self.datasets_to_process:
                 self._process_dataset(
-                    dataset, db_conn_str, max_workers, self.checksum_manifest, load_strategy
+                    dataset, db_conn_str, max_workers, self.checksum_manifest, load_strategy, source_config
                 )
 
         logger.info("\n--- Full Process Complete ---")

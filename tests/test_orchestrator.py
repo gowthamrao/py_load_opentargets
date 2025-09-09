@@ -20,9 +20,12 @@ class TestETLOrchestrator(unittest.TestCase):
                 'backend': 'postgres'
             },
             'source': {
-                'data_uri_template': 'http://fake/{version}/{dataset_name}',
-                'data_download_uri_template': 'gcs://fake-bucket/{version}/{dataset_name}/',
-                'checksum_uri_template': 'gcs://fake-checksums/{version}/'
+                'provider': 'gcs_ftp',
+                'gcs_ftp': {
+                    'data_uri_template': 'http://fake/{version}/{dataset_name}',
+                    'data_download_uri_template': 'gcs://fake-bucket/{version}/{dataset_name}/',
+                    'checksum_uri_template': 'gcs://fake-checksums/{version}/'
+                }
             },
             'datasets': {
                 'targets': {

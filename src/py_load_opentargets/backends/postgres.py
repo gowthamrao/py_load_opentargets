@@ -270,8 +270,6 @@ class PostgresLoader(DatabaseLoader):
         logger.info(f"Total rows loaded into '{table_name}' in a single transaction: {total_rows}")
         return total_rows
 
-    # --- Abstract methods not yet implemented in this step ---
-
     def prepare_staging_schema(self, schema_name: str) -> None:
         logger.info(f"Ensuring schema '{schema_name}' exists.")
         self.cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name};")
@@ -351,8 +349,6 @@ class PostgresLoader(DatabaseLoader):
         """
         schema, table = table_name.split('.')
         logger.info(f"Retrieving index definitions for table '{table_name}'.")
-        # psycopg3 requires table names passed to pg_constraint.conrelid to be fully qualified
-        # if they are not in the search path.
         fully_qualified_table = f'"{schema}"."{table}"'
         sql_query = """
         SELECT indexname, indexdef
@@ -384,7 +380,6 @@ class PostgresLoader(DatabaseLoader):
         for index in indexes:
             index_name = index['name']
             logger.info(f"Dropping index: {index_name}")
-            # Use sql.Identifier for safe quoting
             self.cursor.execute(sql.SQL("DROP INDEX IF EXISTS {};").format(sql.Identifier(index_name)))
         self.conn.commit()
 
@@ -399,7 +394,6 @@ class PostgresLoader(DatabaseLoader):
         logger.info(f"Recreating {len(indexes)} indexes...")
         for index in indexes:
             logger.info(f"Recreating index using DDL: {index['ddl']}")
-            # The DDL is from pg_indexes, so it's considered safe.
             self.cursor.execute(index['ddl'])
         self.conn.commit()
         logger.info("All indexes recreated successfully.")
@@ -410,9 +404,6 @@ class PostgresLoader(DatabaseLoader):
         """
         schema, table = table_name.split('.')
         logger.info(f"Retrieving foreign key definitions for table '{table_name}'.")
-
-        # This query gets the name and the full definition of foreign key constraints
-        # that originate from the specified table.
         sql_query = """
             SELECT
                 con.conname AS name,
@@ -426,7 +417,6 @@ class PostgresLoader(DatabaseLoader):
         """
         self.cursor.execute(sql_query, (schema, table))
         foreign_keys = [{"name": row[0], "ddl": row[1]} for row in self.cursor.fetchall()]
-
         if foreign_keys:
             logger.info(f"Found {len(foreign_keys)} foreign keys: {[fk['name'] for fk in foreign_keys]}")
         else:
@@ -444,7 +434,6 @@ class PostgresLoader(DatabaseLoader):
         for fk in foreign_keys:
             fk_name = fk['name']
             logger.info(f"Dropping foreign key: {fk_name}")
-            # Use sql.Identifier for safe quoting of constraint name
             self.cursor.execute(sql.SQL("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {fk_name};").format(
                 table=table_ident,
                 fk_name=sql.Identifier(fk_name)
@@ -461,9 +450,6 @@ class PostgresLoader(DatabaseLoader):
         table_ident = sql.Identifier(*table_name.split('.'))
         for fk in foreign_keys:
             logger.info(f"Recreating foreign key '{fk['name']}' using DDL: {fk['ddl']}")
-            # The DDL is from pg_get_constraintdef, so it's considered safe.
-            # It comes in the form "FOREIGN KEY (col) REFERENCES other_table(other_col)"
-            # So we wrap it in ALTER TABLE ... ADD CONSTRAINT ...
             self.cursor.execute(sql.SQL("ALTER TABLE {table} ADD CONSTRAINT {fk_name} {ddl};").format(
                 table=table_ident,
                 fk_name=sql.Identifier(fk['name']),
@@ -497,20 +483,11 @@ class PostgresLoader(DatabaseLoader):
         return {row[0]: row[1] for row in self.cursor.fetchall()}
 
     def align_final_table_schema(self, staging_table: str, final_table: str) -> None:
-        """
-        Aligns the schema of the final table to match the staging table.
-        - Adds any columns that exist in the staging table but not in the final table.
-        - Warns about any columns that have different data types between the two tables.
-        """
         logger.info(f"Aligning schema of final table '{final_table}' with staging table '{staging_table}'.")
-
         staging_schema = self._get_table_schema_from_db(staging_table)
         final_schema = self._get_table_schema_from_db(final_table)
-
         staging_cols = set(staging_schema.keys())
         final_cols = set(final_schema.keys())
-
-        # 1. Check for new columns to add
         new_columns = staging_cols - final_cols
         if new_columns:
             logger.info(f"Found {len(new_columns)} new columns to add: {', '.join(sorted(new_columns))}")
@@ -527,15 +504,11 @@ class PostgresLoader(DatabaseLoader):
             logger.info("Successfully added new columns.")
         else:
             logger.info("No new columns to add.")
-
-        # 2. Check for type mismatches in common columns
         common_columns = staging_cols.intersection(final_cols)
         mismatched_columns = []
         for col_name in common_columns:
-            # Normalize types for comparison, e.g., 'character varying' -> 'varchar'
             staging_type = staging_schema[col_name].lower().replace("character varying", "varchar")
             final_type = final_schema[col_name].lower().replace("character varying", "varchar")
-
             if staging_type != final_type:
                 mismatched_columns.append(col_name)
                 logger.warning(
@@ -543,11 +516,8 @@ class PostgresLoader(DatabaseLoader):
                     f"Staging table type is '{staging_type}', but final table type is '{final_type}'. "
                     "The loader will not attempt to alter the column."
                 )
-
         if not mismatched_columns:
             logger.info("No data type mismatches found in common columns.")
-
-        # 3. (Optional) Warn about columns removed in the new version
         removed_columns = final_cols - staging_cols
         if removed_columns:
             logger.warning(
@@ -555,9 +525,7 @@ class PostgresLoader(DatabaseLoader):
                 f"new data source: {', '.join(sorted(removed_columns))}. These columns will be "
                 "kept with their existing data, but will be NULL for new/updated rows."
             )
-
         logger.info(f"Schema alignment check for '{final_table}' complete.")
-
 
     def execute_merge_strategy(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:
         """
@@ -696,11 +664,9 @@ class PostgresLoader(DatabaseLoader):
             final_schema=final_schema_ident
         ))
 
-        # The table is now in the final schema, but with its old name (the dataset name)
         moved_table_name = f"{final_table.split('.')[0]}.{staging_table.split('.')[1]}"
         moved_table_ident = sql.Identifier(*moved_table_name.split('.'))
 
-        # Only rename the table if the final table name is different from the staging table name (the dataset name)
         if staging_table.split('.')[1] != final_table.split('.')[1]:
             logger.info(f"Renaming table '{moved_table_name}' to '{final_table_name_ident.strings[0]}'.")
             self.cursor.execute(sql.SQL("ALTER TABLE {moved_table} RENAME TO {final_table_name};").format(

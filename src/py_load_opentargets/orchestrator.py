@@ -33,7 +33,7 @@ def get_db_loader_factory(backend_name: str) -> Callable[[], DatabaseLoader]:
     for ep in eps:
         if ep.name == backend_name:
             logger.info(f"Found backend entry point: {ep.name}")
-            return ep.load
+            return ep.load()
     raise ValueError(f"No registered backend found for '{backend_name}'")
 
 
@@ -51,6 +51,7 @@ class ETLOrchestrator:
         final_schema: str,
         skip_confirmation: bool = False,
         continue_on_error: bool = True,
+        load_type: str = "delta",
     ):
         self.config = config
         self.datasets_to_process = datasets_to_process
@@ -59,6 +60,7 @@ class ETLOrchestrator:
         self.final_schema = final_schema
         self.skip_confirmation = skip_confirmation
         self.continue_on_error = continue_on_error
+        self.load_type = load_type
         self.checksum_manifest = {}
 
         db_backend = self.config.get('database', {}).get('backend', 'postgres')
@@ -81,7 +83,6 @@ class ETLOrchestrator:
             loader.connect(db_conn_str)
             all_defined_datasets = self.config["datasets"]
             source_config = self.config["source"]
-            uri_template = source_config["data_uri_template"]
 
             dataset_config = all_defined_datasets[dataset_name]
             primary_keys = dataset_config["primary_key"]
@@ -103,6 +104,7 @@ class ETLOrchestrator:
             loader.prepare_staging_schema(self.staging_schema)
 
             if load_strategy == "stream":
+                uri_template = source_config["data_uri_template"]
                 logger.info(f"Using 'stream' strategy for dataset '{dataset_name}'.")
                 parquet_urls = get_remote_dataset_urls(
                     uri_template, self.version, dataset_name
@@ -141,21 +143,29 @@ class ETLOrchestrator:
                     loader.prepare_staging_table(staging_table_name, schema)
                     row_count = loader.bulk_load_native(staging_table_name, local_urls, schema)
 
-            indexes = []
-            try:
-                if loader.table_exists(final_table_full_name):
-                    loader.align_final_table_schema(
-                        staging_table_name, final_table_full_name
-                    )
-                    indexes = loader.get_table_indexes(final_table_full_name)
-                    if indexes:
-                        loader.drop_indexes(indexes)
-                loader.execute_merge_strategy(
+            # Based on the load type, choose the finalization strategy
+            if self.load_type == "full-refresh":
+                logger.info(f"Using 'full-refresh' strategy for final table '{final_table_full_name}'.")
+                loader.full_refresh_from_staging(
                     staging_table_name, final_table_full_name, primary_keys
                 )
-            finally:
-                if indexes:
-                    loader.recreate_indexes(indexes)
+            else:
+                logger.info(f"Using 'delta' merge strategy for final table '{final_table_full_name}'.")
+                indexes = []
+                try:
+                    if loader.table_exists(final_table_full_name):
+                        loader.align_final_table_schema(
+                            staging_table_name, final_table_full_name
+                        )
+                        indexes = loader.get_table_indexes(final_table_full_name)
+                        if indexes:
+                            loader.drop_indexes(indexes)
+                    loader.execute_merge_strategy(
+                        staging_table_name, final_table_full_name, primary_keys
+                    )
+                finally:
+                    if indexes:
+                        loader.recreate_indexes(indexes)
 
             loader.update_metadata(
                 version=self.version,
@@ -173,13 +183,7 @@ class ETLOrchestrator:
                 raise
             return f"Failed: {dataset_name}"
         finally:
-            if loader and loader.conn:
-                try:
-                    staging_table_name = f"{self.staging_schema}.{dataset_name.replace('-', '_')}"
-                    loader.cursor.execute(f"DROP TABLE IF EXISTS {staging_table_name};")
-                    loader.conn.commit()
-                except Exception as cleanup_e:
-                    logger.warning(f"Failed to drop staging table in worker: {cleanup_e}")
+            if 'loader' in locals() and loader:
                 loader.cleanup()
 
     def run(self):

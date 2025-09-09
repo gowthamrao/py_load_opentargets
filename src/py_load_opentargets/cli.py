@@ -49,9 +49,10 @@ def list_versions_cmd(ctx):
 @click.option('--final-schema', default='public', show_default=True, help='Schema for the final table.')
 @click.option('--skip-confirmation', is_flag=True, help='Skip confirmation prompt for loading already loaded versions.')
 @click.option('--no-continue-on-error', is_flag=True, help='Abort the process if an error occurs for any dataset.')
+@click.option('--load-type', type=click.Choice(['delta', 'full-refresh'], case_sensitive=False), default='delta', show_default=True, help='Strategy for loading data.')
 @click.argument('datasets', nargs=-1)
 @click.pass_context
-def load(ctx, version, staging_schema, final_schema, skip_confirmation, no_continue_on_error, datasets: Tuple[str]):
+def load(ctx, version, staging_schema, final_schema, skip_confirmation, no_continue_on_error, load_type, datasets: Tuple[str]):
     """
     Downloads and loads specified Open Targets datasets into a database.
 
@@ -66,6 +67,7 @@ def load(ctx, version, staging_schema, final_schema, skip_confirmation, no_conti
     datasets_to_process = list(datasets or all_defined_datasets.keys())
     click.echo(f"--- Open Targets Universal Loader ---")
     click.echo(f"Selected datasets: {click.style(', '.join(datasets_to_process), bold=True)}")
+    click.echo(f"Load type: {click.style(load_type, bold=True)}")
 
     if not version:
         click.echo("Discovering the latest version...")
@@ -88,7 +90,8 @@ def load(ctx, version, staging_schema, final_schema, skip_confirmation, no_conti
             staging_schema=staging_schema,
             final_schema=final_schema,
             skip_confirmation=skip_confirmation,
-            continue_on_error=not no_continue_on_error
+            continue_on_error=not no_continue_on_error,
+            load_type=load_type
         )
         orchestrator.run()
 

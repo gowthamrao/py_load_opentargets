@@ -72,7 +72,8 @@ class TestETLOrchestrator(unittest.TestCase):
         self.mock_loader.bulk_load_native.assert_called_once_with(ANY, ["http://fake/file1.parquet"], mock_get_schema.return_value)
         self.mock_loader.execute_merge_strategy.assert_called_once()
         self.mock_loader.update_metadata.assert_called_once_with(
-            version=self.version, dataset='targets', success=True, row_count=ANY
+            version=self.version, dataset='targets', success=True, row_count=ANY,
+            start_time=ANY, end_time=ANY
         )
         self.mock_loader.cleanup.assert_called_once()
 
@@ -107,7 +108,8 @@ class TestETLOrchestrator(unittest.TestCase):
         mock_get_urls.assert_called_once()
         self.mock_loader.execute_merge_strategy.assert_not_called()
         self.mock_loader.update_metadata.assert_called_once_with(
-            version=self.version, dataset='diseases', success=False, row_count=0, error_message="DB connection lost"
+            version=self.version, dataset='diseases', success=False, row_count=0, error_message="DB connection lost",
+            start_time=ANY, end_time=ANY
         )
         self.mock_loader.cleanup.assert_called_once()
 

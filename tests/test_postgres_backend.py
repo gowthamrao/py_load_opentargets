@@ -104,25 +104,39 @@ def test_loader(db_conn):
     db_conn.rollback()
 
 
+import time
+
 def test_metadata_tracking(test_loader):
     """Tests the metadata creation and update functionality."""
     dataset = "test_meta"
     version = "1.0"
+    start_time = time.time()
+    end_time = start_time + 10
 
     # Ensure table is clean
     test_loader.cursor.execute("DROP TABLE IF EXISTS _ot_load_metadata;")
 
-    # Test update and retrieval
-    test_loader.update_metadata(version, dataset, True, 100)
+    # Test update and retrieval for a successful run
+    test_loader.update_metadata(version, dataset, True, 100, start_time, end_time)
     last_version = test_loader.get_last_successful_version(dataset)
     assert last_version == version
 
+    # Verify all fields, including timestamps
+    test_loader.cursor.execute("SELECT status, error_message, start_time, end_time FROM _ot_load_metadata WHERE status='success' ORDER BY id DESC LIMIT 1;")
+    status, msg, db_start, db_end = test_loader.cursor.fetchone()
+    assert status == "success"
+    assert msg is None
+    assert db_start is not None
+    assert db_end is not None
+
     # Test failure logging
-    test_loader.update_metadata(version, dataset, False, 0, "A test error")
-    test_loader.cursor.execute("SELECT status, error_message FROM _ot_load_metadata ORDER BY id DESC LIMIT 1;")
-    status, msg = test_loader.cursor.fetchone()
+    test_loader.update_metadata(version, dataset, False, 0, start_time, end_time, "A test error")
+    test_loader.cursor.execute("SELECT status, error_message, start_time, end_time FROM _ot_load_metadata WHERE status='failure' ORDER BY id DESC LIMIT 1;")
+    status, msg, db_start, db_end = test_loader.cursor.fetchone()
     assert status == "failure"
     assert msg == "A test error"
+    assert db_start is not None
+    assert db_end is not None
 
 def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
     """Tests the full merge strategy: initial load and then an upsert."""

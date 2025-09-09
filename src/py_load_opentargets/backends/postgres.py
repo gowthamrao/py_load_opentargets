@@ -269,6 +269,8 @@ class PostgresLoader(DatabaseLoader):
         CREATE TABLE {table_name} (
             id SERIAL PRIMARY KEY,
             load_timestamp TIMESTAMPTZ DEFAULT NOW(),
+            start_time TIMESTAMPTZ,
+            end_time TIMESTAMPTZ,
             opentargets_version TEXT NOT NULL,
             dataset_name TEXT NOT NULL,
             rows_loaded BIGINT,
@@ -529,23 +531,24 @@ class PostgresLoader(DatabaseLoader):
         self.conn.commit()
         logger.info(f"Successfully merged data into '{final_table}'.")
 
-    def update_metadata(self, version: str, dataset: str, success: bool, row_count: int, error_message: str = None) -> None:
+    def update_metadata(self, version: str, dataset: str, success: bool, row_count: int, start_time: Optional[float], end_time: Optional[float], error_message: str = None) -> None:
         """
         Record the outcome of a load operation in the metadata table.
         """
         self._ensure_metadata_table_exists()
         status = "success" if success else "failure"
+        duration = f"{end_time - start_time:.2f}s" if start_time and end_time else "N/A"
         logger.info(
             f"Updating metadata for dataset '{dataset}', version '{version}': "
-            f"status={status}, rows_loaded={row_count}"
+            f"status={status}, rows_loaded={row_count}, duration={duration}"
         )
 
         insert_sql = """
         INSERT INTO _ot_load_metadata
-        (opentargets_version, dataset_name, rows_loaded, status, error_message)
-        VALUES (%s, %s, %s, %s, %s);
+        (opentargets_version, dataset_name, rows_loaded, status, error_message, start_time, end_time)
+        VALUES (%s, %s, %s, %s, %s, to_timestamp(%s), to_timestamp(%s));
         """
-        self.cursor.execute(insert_sql, (version, dataset, row_count, status, error_message))
+        self.cursor.execute(insert_sql, (version, dataset, row_count, status, error_message, start_time, end_time))
         self.conn.commit()
 
     def full_refresh_from_staging(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:

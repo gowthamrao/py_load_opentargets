@@ -6,6 +6,7 @@ from .config import load_config
 from .data_acquisition import list_available_versions
 from .orchestrator import ETLOrchestrator
 from .logging_utils import setup_logging
+from .validator import ValidationService
 
 # Configure logging for the CLI
 logger = logging.getLogger(__name__)
@@ -41,6 +42,35 @@ def list_versions_cmd(ctx):
     except Exception as e:
         click.secho(f"Error during version discovery: {e}", fg='red')
         raise click.Abort()
+
+
+@cli.command()
+@click.pass_context
+def validate(ctx):
+    """Checks configuration and connectivity to the database and data source."""
+    config = ctx.obj['CONFIG']
+    click.echo("--- Running Configuration and Connection Validator ---")
+
+    validator = ValidationService(config)
+    results = validator.run_all_checks()
+
+    all_successful = True
+    for check_name, result in results.items():
+        if result["success"]:
+            status = click.style("SUCCESS", fg='green', bold=True)
+        else:
+            status = click.style("FAILED", fg='red', bold=True)
+            all_successful = False
+
+        message = result["message"]
+        click.echo(f"[{status}] {check_name}: {message}")
+
+    click.echo("--- Validation Complete ---")
+    if not all_successful:
+        click.secho("Validation failed. Please check your configuration and connections.", fg='red')
+        raise click.Abort()
+    else:
+        click.secho("All checks passed successfully!", fg='green')
 
 
 @cli.command()

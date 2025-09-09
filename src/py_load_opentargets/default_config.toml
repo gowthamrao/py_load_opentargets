@@ -10,6 +10,9 @@ max_workers = 4
 # The name of the database backend to use.
 # This must match an entry point in the 'py_load_opentargets.backends' group.
 backend = "postgres"
+# Separator to use when creating column names for flattened struct fields.
+# e.g., 'ancestors' struct with 'id' field becomes 'ancestors_id'.
+flatten_separator = "_"
 
 [source]
 # fsspec-compatible URI for discovering available Open Targets versions.
@@ -34,6 +37,9 @@ data_download_uri_template = "gcs://open-targets/platform/{version}/output/etl/p
 
 [datasets.targets]
 primary_key = ["id"]
+# A list of struct columns to flatten. Each sub-field in the struct
+# will become a new column, named 'struct_name_separator_field_name'.
+flatten_structs = ["genomicLocation", "tep"]
 
 [datasets.diseases]
 primary_key = ["id"]

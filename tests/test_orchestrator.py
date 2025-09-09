@@ -67,7 +67,7 @@ class TestETLOrchestrator(unittest.TestCase):
         # Assert
         mock_get_urls.assert_called_once_with(ANY, self.version, 'targets')
         mock_get_schema.assert_called_once_with(["http://fake/file1.parquet"])
-        self.mock_loader.connect.assert_called_once_with("fake_db_conn_str")
+        self.mock_loader.connect.assert_called_once_with("fake_db_conn_str", ANY)
         self.mock_loader.prepare_staging_table.assert_called_once_with(ANY, mock_get_schema.return_value)
         self.mock_loader.bulk_load_native.assert_called_once_with(ANY, ["http://fake/file1.parquet"], mock_get_schema.return_value)
         self.mock_loader.execute_merge_strategy.assert_called_once()
@@ -134,7 +134,7 @@ class TestETLOrchestrator(unittest.TestCase):
         orchestrator.run()
 
         # Assert
-        self.mock_loader.connect.assert_called_once_with("fake_db_conn_str")
+        self.mock_loader.connect.assert_called_once_with("fake_db_conn_str", ANY)
         self.mock_loader.prepare_staging_table.assert_not_called()
         self.mock_loader.bulk_load_native.assert_not_called()
         # It will still try to update metadata with a failure for the skip

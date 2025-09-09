@@ -1,6 +1,6 @@
 import abc
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 
 class DatabaseLoader(abc.ABC):
@@ -13,11 +13,13 @@ class DatabaseLoader(abc.ABC):
     """
 
     @abc.abstractmethod
-    def connect(self, conn_str: str) -> None:
+    def connect(self, conn_str: str, dataset_config: Optional[Dict[str, Any]] = None) -> None:
         """
         Establish a connection to the target database.
 
         :param conn_str: The database connection string.
+        :param dataset_config: A dictionary containing combined database and
+                               dataset-specific configurations.
         """
         raise NotImplementedError
 

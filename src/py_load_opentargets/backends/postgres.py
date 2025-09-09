@@ -7,7 +7,7 @@ import logging
 import io
 import json
 from pathlib import Path
-from typing import Dict, Any, Iterator, List
+from typing import Dict, Any, Iterator, List, Optional
 
 from ..loader import DatabaseLoader
 
@@ -17,16 +17,24 @@ logger = logging.getLogger(__name__)
 class _ParquetStreamer:
     """
     A file-like object that streams multiple Parquet files as a single TSV stream.
-
     This class iterates through a list of Parquet file paths (local or remote),
     processes them with Polars, and streams them as a single, continuous,
     tab-delimited text stream suitable for PostgreSQL's COPY command.
     This avoids materializing the entire dataset in memory or on disk as a
     single CSV file.
     """
-    def __init__(self, paths: List[str], schema: pa.Schema):
+
+    def __init__(
+        self,
+        paths: List[str],
+        schema: pa.Schema,
+        flatten_structs: Optional[List[str]] = None,
+        flatten_separator: str = "_",
+    ):
         self._paths = iter(paths)
-        self._schema = schema
+        self._original_schema = schema
+        self._flatten_structs = flatten_structs or []
+        self._flatten_separator = flatten_separator
         self._buffer = io.StringIO()
         self._eof = False
 
@@ -38,20 +46,32 @@ class _ParquetStreamer:
 
             lf = pl.scan_parquet(next_path)
 
-            # Prepare data for COPY: serialize nested types to JSON
+            # Prepare data for COPY: handle nested types based on config
             select_exprs = []
-            for field in self._schema:
+            for field in self._original_schema:
                 col_name = field.name
-                if pa.types.is_struct(field.type) or pa.types.is_list(field.type):
+                # If it's a struct and configured to be flattened
+                if pa.types.is_struct(field.type) and col_name in self._flatten_structs:
+                    logger.info(f"Flattening struct column: '{col_name}'")
+                    for sub_field in field.type:
+                        new_col_name = f"{col_name}{self._flatten_separator}{sub_field.name}"
+                        select_exprs.append(
+                            pl.col(col_name).struct.field(sub_field.name).alias(new_col_name)
+                        )
+                # If it's any other nested type, serialize to JSON
+                elif pa.types.is_struct(field.type) or pa.types.is_list(field.type):
+                    logger.debug(f"Serializing nested column to JSON: '{col_name}'")
                     select_exprs.append(pl.col(col_name).to_json().alias(col_name))
+                # Otherwise, it's a primitive type
                 else:
                     select_exprs.append(pl.col(col_name))
+
             lf = lf.select(select_exprs)
 
             # Reset buffer and write new data into it
             self._buffer.seek(0)
             self._buffer.truncate(0)
-            lf.sink_csv(self._buffer, separator='\t', null_value='\\N', include_header=False)
+            lf.sink_csv(self._buffer, separator="\t", null_value="\\N", include_header=False)
             self._buffer.seek(0)
 
         except StopIteration:
@@ -61,19 +81,16 @@ class _ParquetStreamer:
     def read(self, size: int = -1) -> str:
         """
         Read 'size' bytes from the stream.
-
         If the buffer is exhausted, it attempts to load the next file.
         """
         if self._eof:
             return ""
 
         data = self._buffer.read(size)
-        # If we didn't get any data and we are not at EOF, it means the current
-        # file's buffer is empty. Time to load the next one.
         while not data and not self._eof:
             self._load_next_file_into_buffer()
             if self._eof:
-                return "" # No more files to load
+                return ""
             data = self._buffer.read(size)
 
         return data
@@ -82,7 +99,6 @@ class _ParquetStreamer:
 class PostgresLoader(DatabaseLoader):
     """
     A database loader for PostgreSQL.
-
     This class implements the DatabaseLoader interface for loading data
     efficiently into a PostgreSQL database.
     """
@@ -90,10 +106,12 @@ class PostgresLoader(DatabaseLoader):
     def __init__(self):
         self.conn = None
         self.cursor = None
+        self.dataset_config = {}
 
-    def connect(self, conn_str: str) -> None:
+    def connect(self, conn_str: str, dataset_config: Optional[Dict[str, Any]] = None) -> None:
         """Establishes a connection to the PostgreSQL database."""
         logger.info("Connecting to PostgreSQL database...")
+        self.dataset_config = dataset_config or {}
         try:
             self.conn = psycopg.connect(conn_str)
             self.cursor = self.conn.cursor()
@@ -115,7 +133,7 @@ class PostgresLoader(DatabaseLoader):
         if pa.types.is_string(arrow_type) or pa.types.is_large_string(arrow_type):
             return "TEXT"
         elif pa.types.is_integer(arrow_type):
-            return "BIGINT" # Default to BIGINT for all integers
+            return "BIGINT"
         elif pa.types.is_floating(arrow_type):
             return "DOUBLE PRECISION"
         elif pa.types.is_boolean(arrow_type):
@@ -125,14 +143,32 @@ class PostgresLoader(DatabaseLoader):
         elif pa.types.is_date(arrow_type):
             return "DATE"
         elif pa.types.is_struct(arrow_type) or pa.types.is_list(arrow_type):
-            # For nested structures, we'll store them as JSONB
             return "JSONB"
         else:
             logger.warning(f"Unsupported PyArrow type {arrow_type}. Defaulting to TEXT.")
             return "TEXT"
 
+    def _get_transformed_schema(self, original_schema: pa.Schema) -> pa.Schema:
+        """
+        Transforms a PyArrow schema by flattening specified struct columns.
+        """
+        flatten_structs = self.dataset_config.get("flatten_structs", [])
+        flatten_separator = self.dataset_config.get("flatten_separator", "_")
+
+        new_fields = []
+        for field in original_schema:
+            # If it's a struct and configured to be flattened
+            if pa.types.is_struct(field.type) and field.name in flatten_structs:
+                for sub_field in field.type:
+                    new_name = f"{field.name}{flatten_separator}{sub_field.name}"
+                    new_fields.append(pa.field(new_name, sub_field.type))
+            else:
+                new_fields.append(field)
+
+        return pa.schema(new_fields)
+
     def _generate_create_table_sql(self, table_name: str, schema: pa.Schema) -> str:
-        """Generates a CREATE TABLE SQL statement from a PyArrow schema."""
+        """Generates a CREATE TABLE SQL statement from a (potentially transformed) PyArrow schema."""
         columns = []
         for field in schema:
             col_name = field.name
@@ -144,25 +180,27 @@ class PostgresLoader(DatabaseLoader):
 
     def prepare_staging_table(self, table_name: str, schema: pa.Schema) -> None:
         """
-        Creates a staging table with the given PyArrow schema.
+        Creates a staging table with a schema transformed based on the config.
         The table is dropped if it already exists.
         """
         logger.info(f"Preparing staging table '{table_name}'...")
 
-        create_sql = self._generate_create_table_sql(table_name, schema)
+        transformed_schema = self._get_transformed_schema(schema)
+        create_sql = self._generate_create_table_sql(table_name, transformed_schema)
 
         logger.info(f"Dropping table '{table_name}' if it exists.")
         self.cursor.execute(f"DROP TABLE IF EXISTS {table_name};")
 
-        logger.info(f"Creating table '{table_name}' with provided schema.")
+        logger.info(f"Creating table '{table_name}' with transformed schema.")
         logger.debug(f"CREATE TABLE SQL:\n{create_sql}")
         self.cursor.execute(create_sql)
         self.conn.commit()
 
     def bulk_load_native(self, table_name: str, parquet_paths: List[str], schema: pa.Schema) -> int:
         """
-        Loads data from a list of Parquet files (local or remote) into a
-        PostgreSQL table using a single, streamed, native COPY command.
+        Loads data from a list of Parquet files into a PostgreSQL table using a
+        single, streamed, native COPY command, handling data transformations like
+        flattening on the fly.
         """
         logger.info(f"Starting single-stream bulk load for '{table_name}'.")
 
@@ -170,17 +208,25 @@ class PostgresLoader(DatabaseLoader):
             logger.warning(f"No .parquet files provided. Skipping bulk load.")
             return 0
 
-        # The columns in the COPY command must match the file's columns
-        columns_str = ", ".join([f'"{f.name}"' for f in schema])
+        flatten_structs = self.dataset_config.get("flatten_structs", [])
+        flatten_separator = self.dataset_config.get("flatten_separator", "_")
+
+        # The schema of the data stream must match the table schema
+        transformed_schema = self._get_transformed_schema(schema)
+        columns_str = ", ".join([f'"{f.name}"' for f in transformed_schema])
         copy_sql = f"COPY {table_name} ({columns_str}) FROM STDIN WITH (FORMAT text, DELIMITER E'\\t', NULL '\\N')"
 
-        # Create our custom streamer instance
-        streamer = _ParquetStreamer(paths=parquet_paths, schema=schema)
+        streamer = _ParquetStreamer(
+            paths=parquet_paths,
+            schema=schema, # Streamer needs original schema to read files
+            flatten_structs=flatten_structs,
+            flatten_separator=flatten_separator,
+        )
 
         logger.info(f"Executing single COPY command for {len(parquet_paths)} files...")
         with self.cursor.copy(copy_sql) as copy:
             while True:
-                chunk = streamer.read(8192)  # Read in 8KB chunks
+                chunk = streamer.read(8192)
                 if not chunk:
                     break
                 copy.write(chunk)

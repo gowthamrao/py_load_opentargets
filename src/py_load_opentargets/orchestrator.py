@@ -80,11 +80,19 @@ class ETLOrchestrator:
         """
         loader = self.loader_factory()
         try:
-            loader.connect(db_conn_str)
+            # Get configs
             all_defined_datasets = self.config["datasets"]
             source_config = self.config["source"]
-
+            database_config = self.config.get("database", {})
             dataset_config = all_defined_datasets[dataset_name]
+
+            # Combine database and dataset config to pass to loader
+            # This allows the loader to access db-level settings like `flatten_separator`
+            # and dataset-level settings like `flatten_structs`.
+            loader_config = database_config.copy()
+            loader_config.update(dataset_config)
+
+            loader.connect(db_conn_str, loader_config)
             primary_keys = dataset_config["primary_key"]
             final_table = dataset_config.get(
                 "final_table_name", dataset_name.replace("-", "_")

@@ -58,10 +58,18 @@ class _ParquetStreamer:
                         select_exprs.append(
                             pl.col(col_name).struct.field(sub_field.name).alias(new_col_name)
                         )
-                # If it's any other nested type, serialize to JSON
-                elif pa.types.is_struct(field.type) or pa.types.is_list(field.type):
-                    logger.debug(f"Serializing nested column to JSON: '{col_name}'")
-                    select_exprs.append(pl.col(col_name).to_json().alias(col_name))
+                # If it's a struct that's not being flattened, serialize to JSON
+                elif pa.types.is_struct(field.type):
+                    logger.debug(f"Serializing struct column to JSON: '{col_name}'")
+                    select_exprs.append(
+                        pl.col(col_name).struct.json_encode().alias(col_name)
+                    )
+                # If it's a list, serialize to JSON
+                elif pa.types.is_list(field.type):
+                    logger.debug(f"Serializing list column to JSON: '{col_name}'")
+                    select_exprs.append(
+                        pl.col(col_name).list.json_encode().alias(col_name)
+                    )
                 # Otherwise, it's a primitive type
                 else:
                     select_exprs.append(pl.col(col_name))
@@ -71,7 +79,7 @@ class _ParquetStreamer:
             # Reset buffer and write new data into it
             self._buffer.seek(0)
             self._buffer.truncate(0)
-            lf.sink_csv(self._buffer, separator="\t", null_value="\\N", include_header=False)
+            lf.sink_csv(self._buffer, separator="\t", null_value="\\N", include_header=False, quote_style="never")
             self._buffer.seek(0)
 
         except StopIteration:

@@ -134,8 +134,14 @@ def test_align_final_table_schema_detects_all_drift_types(loader, mocker, caplog
     # 1. Setup
     # Mock the database connection and cursor
     mock_conn = mocker.patch('psycopg.connect').return_value
-    mock_conn.info.encoding = "utf-8"  # psycopg3 uses conn.info.encoding
     mock_cursor = mock_conn.cursor.return_value
+
+    # The psycopg Composed object's `as_string` method needs a context object
+    # that has a `.connection.info.encoding` attribute. We must mock this structure.
+    mock_info = mocker.MagicMock()
+    mock_info.encoding = 'utf-8'
+    mock_conn.connection.info = mock_info
+
     loader.conn = mock_conn
     loader.cursor = mock_cursor
 
@@ -166,8 +172,17 @@ def test_align_final_table_schema_detects_all_drift_types(loader, mocker, caplog
     # 3. Assert
     # a. Assert that ALTER TABLE was called to add the new column
     mock_cursor.execute.assert_called_once()
-    call_args = mock_cursor.execute.call_args[0][0].as_string(mock_conn)
-    assert 'ALTER TABLE "final"."table" ADD COLUMN "new_column" jsonb' in call_args
+    # Instead of rendering the SQL to a string (which is complex to mock),
+    # we inspect the representation of the Composed object to ensure the
+    # correct components were used to build it.
+    composed_sql = mock_cursor.execute.call_args.args[0]
+    executed_sql_repr = repr(composed_sql)
+
+    assert "SQL('ALTER TABLE ')" in executed_sql_repr
+    assert "Identifier('final', 'table')" in executed_sql_repr
+    assert "SQL(' ADD COLUMN ')" in executed_sql_repr
+    assert "Identifier('new_column')" in executed_sql_repr
+    assert "SQL('jsonb')" in executed_sql_repr
 
     # b. Assert that warnings were logged for mismatched types and removed columns
     assert "SCHEMA DRIFT DETECTED for column 'score'" in caplog.text

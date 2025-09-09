@@ -99,6 +99,24 @@ def load(ctx, version, staging_schema, final_schema, skip_confirmation, no_conti
     click.echo(f"Selected datasets: {click.style(', '.join(datasets_to_process), bold=True)}")
     click.echo(f"Load type: {click.style(load_type, bold=True)}")
 
+    # Run validation checks before proceeding
+    click.echo("Validating configuration and connections...")
+    validator = ValidationService(config)
+    results = validator.run_all_checks()
+    all_successful = True
+    for check_name, result in results.items():
+        if not result["success"]:
+            all_successful = False
+            message = result["message"]
+            click.secho(f"Validation FAILED for '{check_name}': {message}", fg='red')
+
+    if not all_successful:
+        click.secho("Prerequisite validation failed. Please check your configuration.", fg='red', bold=True)
+        raise click.Abort()
+    else:
+        click.echo(click.style("Validation successful.", fg='green'))
+
+
     if not version:
         click.echo("Discovering the latest version...")
         try:

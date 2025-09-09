@@ -6,6 +6,11 @@
 # A value of 1 means sequential processing.
 max_workers = 4
 
+[logging]
+# Set to true to output logs in a structured JSON format.
+# This can be overridden by the --json-logs flag in the CLI.
+json_format = false
+
 [database]
 # The name of the database backend to use.
 # This must match an entry point in the 'py_load_opentargets.backends' group.

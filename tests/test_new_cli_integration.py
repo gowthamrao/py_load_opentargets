@@ -318,6 +318,56 @@ def test_validate_command_success(monkeypatch, test_config, db_conn_str):
     assert "All checks passed successfully!" in result.output
 
 
+@pytest.fixture
+def test_config_invalid(tmp_path: Path) -> Path:
+    """Creates a temporary config.toml file that is missing a primary key."""
+    config_content = """
+[source]
+version_discovery_uri = "ftp://fake.host/fake/path/"
+data_download_uri_template = "gcs://fake-bucket/{version}/output/etl/parquet/{dataset_name}/"
+
+[datasets.test_data_one]
+# Missing primary_key to trigger validation error
+# primary_key = ["id"]
+"""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(config_content)
+    return config_file
+
+
+def test_load_command_fails_on_invalid_config(
+    monkeypatch, test_config_invalid, db_conn_str
+):
+    """
+    Tests that the `load` command runs the validator and fails before
+    starting the orchestrator if the configuration is invalid.
+    """
+    # Mock the orchestrator's run method to check if it gets called
+    mock_orchestrator_run = MagicMock()
+    monkeypatch.setattr("py_load_opentargets.orchestrator.ETLOrchestrator.run", mock_orchestrator_run)
+
+    runner = CliRunner()
+    args = [
+        "--config", str(test_config_invalid),
+        "load",
+        "test_data_one",
+    ]
+
+    # We expect this to fail, so we catch the exception (Abort)
+    result = runner.invoke(cli, args, catch_exceptions=True, env={"DB_CONN_STR": db_conn_str})
+
+    # 1. Assert that the command failed
+    assert result.exit_code != 0, "CLI command should have failed but didn't."
+
+    # 2. Assert that the validation error message was shown
+    assert "Validation FAILED" in result.output
+    assert "missing 'primary_key'" in result.output
+    assert "Prerequisite validation failed" in result.output
+
+    # 3. Assert that the main orchestrator logic was NOT called
+    mock_orchestrator_run.assert_not_called()
+
+
 def test_validate_command_failure(monkeypatch, test_config):
     """
     Tests the `validate` command when one of the checks fails.

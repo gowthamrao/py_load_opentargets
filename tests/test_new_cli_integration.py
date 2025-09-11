@@ -104,10 +104,11 @@ def mock_data_acquisition(monkeypatch, tmp_path: Path):
             "output/etl/parquet/test_data_flat/data.parquet": "dummy_checksum_3",
         }
 
-    # list_available_versions is called in the CLI module and the validator module.
-    # We must patch it in both places where it is imported.
+    # list_available_versions is called from the CLI, API, and validator modules.
+    # We must patch it in all places where it is imported to prevent real network calls.
     monkeypatch.setattr("py_load_opentargets.cli.list_available_versions", mock_list_versions)
     monkeypatch.setattr("py_load_opentargets.validator.list_available_versions", mock_list_versions)
+    monkeypatch.setattr("py_load_opentargets.api.list_available_versions", mock_list_versions)
     # These two are called from the orchestrator
     monkeypatch.setattr("py_load_opentargets.orchestrator.download_dataset", mock_download)
     monkeypatch.setattr("py_load_opentargets.orchestrator.get_checksum_manifest", mock_get_checksum_manifest)
@@ -232,7 +233,6 @@ def test_cli_flattening(db_conn, db_conn_str, mock_data_acquisition, test_config
     ]
 
 
-@pytest.mark.xfail(reason="This test fails due to an unresolved issue with table visibility after a full refresh in the test environment.")
 def test_cli_full_refresh(db_conn, db_conn_str, mock_data_acquisition, test_config, mock_plain_logging):
     """
     Tests that the `--load-type=full-refresh` strategy correctly replaces old data.

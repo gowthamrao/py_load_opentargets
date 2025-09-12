@@ -1,6 +1,7 @@
 import pytest
 import psycopg
 from testcontainers.postgres import PostgresContainer
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 @pytest.fixture(scope="session")
 def db_conn_str():
@@ -8,7 +9,7 @@ def db_conn_str():
     Provides a connection string to a temporary, containerized PostgreSQL instance.
     This fixture is session-scoped, so the container is started once per test session.
     """
-    with PostgresContainer("postgres:16-alpine") as postgres:
+    with PostgresContainer("postgres:16-alpine").waiting_for(LogMessageWaitStrategy("database system is ready to accept connections")) as postgres:
         yield postgres.get_connection_url().replace("+psycopg2", "")
 
 @pytest.fixture(scope="function")

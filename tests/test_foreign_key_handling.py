@@ -1,5 +1,6 @@
 import pytest
 from testcontainers.postgres import PostgresContainer
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 import psycopg
 from psycopg import sql
 
@@ -8,7 +9,7 @@ from py_load_opentargets.backends.postgres import PostgresLoader
 @pytest.fixture(scope="module")
 def postgres_container():
     """Starts a PostgreSQL container for the test module."""
-    with PostgresContainer("postgres:16") as container:
+    with PostgresContainer("postgres:16").waiting_for(LogMessageWaitStrategy("database system is ready to accept connections")) as container:
         yield container
 
 @pytest.fixture

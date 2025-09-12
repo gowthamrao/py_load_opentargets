@@ -4,7 +4,7 @@ import pyarrow.parquet as pq
 from pathlib import Path
 import polars as pl
 
-from src.py_load_opentargets.backends.postgres import PostgresLoader, _ParquetStreamer
+from py_load_opentargets.backends.postgres import PostgresLoader, _ParquetStreamer
 
 @pytest.fixture(scope="module")
 def complex_parquet_file(tmp_path_factory) -> Path:

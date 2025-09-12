@@ -4,7 +4,7 @@ import toml
 import hashlib
 import pyarrow as pa
 import pyarrow.parquet as pq
-from moto import mock_aws
+from moto import mock_s3
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -27,7 +27,7 @@ def aws_credentials():
 @pytest.fixture(scope="function")
 def s3_client(aws_credentials):
     """Yields a boto3 S3 client in a mocked AWS environment."""
-    with mock_aws():
+    with mock_s3():
         yield boto3.client("s3")
 
 @pytest.fixture(scope="function")

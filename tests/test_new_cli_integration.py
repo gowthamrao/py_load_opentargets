@@ -16,13 +16,15 @@ from py_load_opentargets.cli import cli
 def cleanup_db(db_conn):
     """Auto-cleanup fixture to drop tables and schemas after each test."""
     yield
-    cursor = db_conn.cursor()
-    # Use CASCADE to ensure that any tables left over in the staging schema
-    # are dropped along with it.
-    cursor.execute("DROP SCHEMA IF EXISTS staging CASCADE;")
-    # Clean up other test tables and metadata table
-    cursor.execute("DROP TABLE IF EXISTS public.test_data_one, public.test_data_two, _ot_load_metadata;")
-    db_conn.commit()
+    with db_conn.cursor() as cursor:
+        # Use CASCADE to ensure that any tables left over in the staging schema
+        # are dropped along with it.
+        cursor.execute("DROP SCHEMA IF EXISTS staging CASCADE;")
+        # Clean up other test tables
+        cursor.execute("DROP TABLE IF EXISTS public.test_data_one, public.test_data_two, public.test_data_flat;")
+        # Truncate metadata table to ensure a clean slate for each test
+        cursor.execute("TRUNCATE _ot_load_metadata;")
+        db_conn.commit()
 
 @pytest.fixture
 def test_config(tmp_path: Path) -> Path:

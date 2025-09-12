@@ -650,7 +650,8 @@ class PostgresLoader(DatabaseLoader):
         final_table_ident = sql.Identifier(*final_table.split('.'))
         staging_table_ident = sql.Identifier(*staging_table.split('.'))
         pk_idents = [sql.Identifier(k) for k in primary_keys]
-        pk_constraint_name = sql.Identifier(f"pk_{final_table.replace('.', '_')}")
+        pk_name_str = f"pk_{final_table.replace('.', '_')}"
+        pk_constraint_name = sql.Identifier(pk_name_str)
 
         logger.info(f"Dropping final table '{final_table}' if it exists.")
         self.cursor.execute(sql.SQL("DROP TABLE IF EXISTS {final_table};").format(final_table=final_table_ident))
@@ -658,7 +659,7 @@ class PostgresLoader(DatabaseLoader):
         final_schema_ident = sql.Identifier(final_table.split('.')[0])
         final_table_name_ident = sql.Identifier(final_table.split('.')[1])
 
-        logger.info(f"Moving staging table '{staging_table}' to schema '{final_schema_ident.strings[0]}'.")
+        logger.info(f"Moving staging table '{staging_table}' to schema '{final_table.split('.')[0]}'.")
         self.cursor.execute(sql.SQL("ALTER TABLE {staging_table} SET SCHEMA {final_schema};").format(
             staging_table=staging_table_ident,
             final_schema=final_schema_ident
@@ -668,13 +669,13 @@ class PostgresLoader(DatabaseLoader):
         moved_table_ident = sql.Identifier(*moved_table_name.split('.'))
 
         if staging_table.split('.')[1] != final_table.split('.')[1]:
-            logger.info(f"Renaming table '{moved_table_name}' to '{final_table_name_ident.strings[0]}'.")
+            logger.info(f"Renaming table '{moved_table_name}' to '{final_table.split('.')[1]}'.")
             self.cursor.execute(sql.SQL("ALTER TABLE {moved_table} RENAME TO {final_table_name};").format(
                 moved_table=moved_table_ident,
                 final_table_name=final_table_name_ident
             ))
 
-        logger.info(f"Adding primary key constraint '{pk_constraint_name.strings[0]}' to '{final_table}'.")
+        logger.info(f"Adding primary key constraint '{pk_name_str}' to '{final_table}'.")
         self.cursor.execute(sql.SQL("ALTER TABLE {final_table} ADD CONSTRAINT {pk_name} PRIMARY KEY ({pk_cols});").format(
             final_table=final_table_ident,
             pk_name=pk_constraint_name,

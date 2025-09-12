@@ -29,25 +29,26 @@ dependencies = [
     "python-json-logger",
 ]
 
-[project.optional-dependencies]
+[tool.poetry.group.dev.dependencies]
+testcontainers = {extras = ["postgres"], version = "^3.7.1"}
+pytest = "^7.4.2"
+pytest-mock = "^3.11.1"
+ruff = "^0.0.292"
+moto = {extras = ["s3"], version = "^4.2.6"}
+boto3 = "^1.28.57"
+s3fs = ">=2023.9.0"
+fsspec = ">=2023.9.0"
+toml = "^0.10.2"
+sqlalchemy = "^2.0.43"
+psycopg2-binary = "^2.9.10"
+
+[tool.poetry.group.docs.dependencies]
+mkdocs-material = "^9.4.6"
+
+[tool.poetry.extras]
 gcs = ["gcsfs"]
 s3 = ["s3fs"]
-all_cloud = ["gcsfs", "s3fs"]
-test = [
-    "pytest",
-    "testcontainers[postgres]",
-    "pytest-mock",
-    "ruff",
-    "moto[s3]",
-    "boto3",
-    "s3fs>=2023.9.0",
-    "fsspec>=2023.9.0",
-    "toml",
-]
-docs = [
-    "mkdocs",
-    "mkdocs-material",
-]
+all = ["gcsfs", "s3fs"]
 
 [project.urls]
 "Homepage" = "https://github.com/ohdsi/py_load_opentargets" # Placeholder

@@ -1,6 +1,6 @@
 import logging
 import sys
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 def setup_logging(level=logging.INFO, json_format=False):
     """
@@ -22,7 +22,7 @@ def setup_logging(level=logging.INFO, json_format=False):
 
     if json_format:
         # Use a JSON formatter
-        formatter = jsonlogger.JsonFormatter(
+        formatter = JsonFormatter(
             '%(asctime)s %(name)s %(levelname)s %(message)s'
         )
         handler.setFormatter(formatter)

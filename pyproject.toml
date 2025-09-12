@@ -67,5 +67,11 @@ testpaths = [
 ]
 pythonpath = "."
 
+[tool.hatch.envs.test]
+features = ["test"]
+
+[tool.hatch.envs.test.scripts]
+run = "pytest {args}"
+
 [tool.hatch.scripts]
 docs = "mkdocs serve"

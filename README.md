@@ -78,6 +78,28 @@ The tool will:
 4. Merge data into the final table using the defined primary keys.
 5. Record the process in a `_ot_load_metadata` table.
 
+## Development
+
+This project uses `hatch` for dependency management and running tests.
+
+### 1. Installation
+
+First, install `hatch`:
+
+```bash
+pipx install hatch
+```
+
+### 2. Running the tests
+
+To run the tests, use the following command:
+
+```bash
+hatch run test:run
+```
+
+This will create a dedicated test environment, install all necessary dependencies, and run the test suite.
+
 ## Contributing
 
 Contributions are welcome! Please see the `CONTRIBUTING.md` file for more details.

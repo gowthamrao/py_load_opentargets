@@ -1,11 +1,12 @@
 import pytest
-import os
 import psycopg
 from unittest.mock import MagicMock
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pathlib import Path
 from click.testing import CliRunner
+import logging
+import json
 
 from py_load_opentargets.cli import cli
 
@@ -115,8 +116,6 @@ def mock_data_acquisition(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("py_load_opentargets.orchestrator.download_dataset", mock_download)
     monkeypatch.setattr("py_load_opentargets.orchestrator.get_checksum_manifest", mock_get_checksum_manifest)
 
-import logging
-
 
 @pytest.fixture
 def mock_plain_logging(monkeypatch):
@@ -222,7 +221,6 @@ def test_cli_flattening(db_conn, db_conn_str, mock_data_acquisition, test_config
     final_data = cursor.fetchall()
 
     # The 'other_nested' column should be valid JSON
-    import json
     # psycopg may return JSONB as a string or a dict depending on version/context.
     # Handle both cases for robust testing.
     parsed_data = [
@@ -372,8 +370,6 @@ def test_load_command_fails_on_invalid_config(
     # 3. Assert that the main orchestrator logic was NOT called
     mock_orchestrator_run.assert_not_called()
 
-
-import json
 
 def test_cli_json_logging_flag(db_conn_str, mock_data_acquisition, test_config):
     """

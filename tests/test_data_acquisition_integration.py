@@ -1,9 +1,8 @@
 import pytest
 from pathlib import Path
-import os
 import hashlib
 
-from py_load_opentargets.data_acquisition import list_available_versions, get_checksum_manifest, download_dataset
+from py_load_opentargets.data_acquisition import list_available_versions, get_checksum_manifest
 
 # --- Configuration ---
 

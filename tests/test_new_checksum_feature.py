@@ -1,6 +1,6 @@
 import pytest
 import hashlib
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, mock_open
 
 # Functions to test
 from py_load_opentargets.data_acquisition import (

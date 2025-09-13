@@ -1,5 +1,4 @@
 import fsspec
-import re
 from pathlib import Path
 
 # Using a hardcoded recent version to avoid repeated FTP listing

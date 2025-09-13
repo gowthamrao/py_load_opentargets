@@ -1,6 +1,5 @@
 import pytest
-import os
-from py_load_opentargets.config import load_config, get_config, _config
+from py_load_opentargets.config import load_config, get_config
 
 def test_load_config_file_not_found():
     """

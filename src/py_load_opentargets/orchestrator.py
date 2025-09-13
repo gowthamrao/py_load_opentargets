@@ -211,12 +211,19 @@ class ETLOrchestrator:
             return f"Success: {dataset_name}"
         except Exception as e:
             end_time = time.time()
+            # If a database error occurs, the transaction is poisoned. We must rollback
+            # before we can write the failure to the metadata table.
+            if hasattr(loader, "conn") and loader.conn and not loader.conn.closed:
+                try:
+                    loader.conn.rollback()
+                except Exception as rollback_exc:
+                    logger.error(f"Failed to rollback transaction for '{dataset_name}': {rollback_exc}")
+
             logger.error(f"Error processing dataset '{dataset_name}': {e}", exc_info=True)
             error_message = str(e).replace('\n', ' ').strip()
             loader.update_metadata(version=self.version, dataset=dataset_name, success=False, row_count=0, start_time=start_time, end_time=end_time, error_message=error_message)
-            if not self.continue_on_error:
-                raise
-            return f"Failed: {dataset_name}"
+            # Re-raise the exception so the main thread can handle it
+            raise e
         finally:
             if 'loader' in locals() and loader:
                 loader.cleanup()

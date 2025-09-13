@@ -400,9 +400,9 @@ def get_remote_dataset_urls(uri_template: str, version: str, dataset_name: str) 
             return []
         # Use a protocol-aware join for full URLs
         protocol = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
-        base_url = f"{protocol}://{path}"
 
-        remote_files = sorted([f"{base_url}/{p.split('/')[-1]}" for p in fs.glob(f"{path}/*.parquet")])
+        # The glob returns paths relative to the host, so we need to prepend the protocol and host.
+        remote_files = sorted([f"{protocol}://{fs.host}/{p.lstrip('/')}" for p in fs.glob(f"{path}/*.parquet")])
 
         if not remote_files:
             logger.warning(f"No .parquet files found at {dataset_url}. Check the path and dataset name.")

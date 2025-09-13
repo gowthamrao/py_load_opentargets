@@ -106,10 +106,12 @@ class TestETLOrchestrator(unittest.TestCase):
         )
         orchestrator.loader_factory = self.mock_loader_factory
 
-        # Act
-        orchestrator.run()
+        # Act & Assert
+        with self.assertRaises(Exception) as cm:
+            orchestrator.run()
 
-        # Assert
+        self.assertEqual(str(cm.exception), "DB connection lost")
+
         mock_get_urls.assert_called_once()
         self.mock_loader.execute_merge_strategy.assert_not_called()
         self.mock_loader.update_metadata.assert_called_once_with(

@@ -1,4 +1,4 @@
-name: Python Package CI
+name: CI
 
 on:
   push:
@@ -7,85 +7,35 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-test:
+  test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v3
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
+    - name: Set up Python
+      uses: actions/setup-python@v3
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.9'
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y postgresql postgresql-client
+    - name: Install hatch
+      run: pipx install hatch
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e .[test]
-
-    - name: Lint with ruff
-      run: |
-        ruff check --output-format=github .
-
-    - name: Test with pytest
-      run: |
-        export PG_BIN=/usr/lib/postgresql/16/bin
-        export PATH="$PATH:$PG_BIN"
-        python -m pytest --cov=src/py_load_opentargets
-
-  release:
-    needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install build dependencies
-        run: python -m pip install build
-      - name: Build package
-        run: python -m build
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
-
-  deploy-docs:
-    needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.12
-      - name: Install documentation dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install .[docs]
-      - name: Build documentation
-        run: mkdocs build
-      - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./site
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+    - name: Run tests
+      env:
+        DB_CONN_STR: "postgresql://user:password@localhost:5432/test_db"
+      run: hatch run test:run

@@ -667,7 +667,7 @@ class PostgresLoader(DatabaseLoader):
         ))
 
         # Add the primary key to the new final table
-        logger.info(f"Adding primary key constraint '{pk_constraint_name.strings[0]}' to '{final_table}'.")
+        logger.info(f"Adding primary key constraint '{pk_constraint_name}' to '{final_table}'.")
         self.cursor.execute(sql.SQL("ALTER TABLE {final_table} ADD CONSTRAINT {pk_name} PRIMARY KEY ({pk_cols});").format(
             final_table=final_table_ident,
             pk_name=pk_constraint_name,

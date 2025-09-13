@@ -21,7 +21,12 @@ def list_available_versions(discovery_uri: str) -> List[str]:
     """
     logger.info(f"Checking for available versions at {discovery_uri}...")
     try:
-        fs, path = fsspec.core.url_to_fs(discovery_uri, anon=True)
+        if discovery_uri.startswith(('http://', 'https://')):
+            fs, path = fsspec.core.url_to_fs(discovery_uri)
+        elif discovery_uri.startswith('gs://'):
+            fs, path = fsspec.core.url_to_fs(discovery_uri, token='anon')
+        else:
+            fs, path = fsspec.core.url_to_fs(discovery_uri, anon=True, timeout=30)
         version_pattern = re.compile(r"^\d{2}\.\d{2}$")
         all_paths = fs.ls(path, detail=False)
 
@@ -53,7 +58,12 @@ def discover_datasets(datasets_uri: str) -> List[str]:
     """
     logger.info(f"Discovering datasets at {datasets_uri}...")
     try:
-        fs, path = fsspec.core.url_to_fs(datasets_uri, anon=True)
+        if datasets_uri.startswith(('http://', 'https://')):
+            fs, path = fsspec.core.url_to_fs(datasets_uri)
+        elif datasets_uri.startswith('gs://'):
+            fs, path = fsspec.core.url_to_fs(datasets_uri, token='anon')
+        else:
+            fs, path = fsspec.core.url_to_fs(datasets_uri, anon=True)
         all_entries = fs.ls(path, detail=True)
 
         if not all_entries:
@@ -103,7 +113,12 @@ def get_checksum_manifest(version: str, checksum_uri_template: str) -> Dict[str,
     logger.info(f"Downloading checksum manifest from {release_uri}")
 
     try:
-        fs, _ = fsspec.core.url_to_fs(release_uri, anon=True)
+        if release_uri.startswith(('http://', 'https://')):
+            fs, _ = fsspec.core.url_to_fs(release_uri)
+        elif release_uri.startswith('gs://'):
+            fs, _ = fsspec.core.url_to_fs(release_uri, token='anon')
+        else:
+            fs, _ = fsspec.core.url_to_fs(release_uri, anon=True, timeout=30)
 
         # 1. Download the manifest file and its checksum file
         with fs.open(checksum_for_manifest_path, 'r') as f:
@@ -211,6 +226,7 @@ def download_dataset(
     output_dir: Path,
     checksum_manifest: Dict[str, str],
     max_workers: int = 1,
+    files_to_download: List[str] = None,
 ) -> Path:
     """
     Downloads a specific dataset for a given Open Targets version from a templated URI,
@@ -222,6 +238,8 @@ def download_dataset(
     :param output_dir: The local directory to save the downloaded files.
     :param checksum_manifest: A dictionary mapping file paths to their SHA1 checksums.
     :param max_workers: The maximum number of parallel download threads.
+    :param files_to_download: An optional list of specific filenames to download.
+                              If None, all files in the dataset are downloaded.
     :return: The path to the directory containing the downloaded dataset.
     """
     dataset_url = uri_template.format(version=version, dataset_name=dataset)
@@ -233,11 +251,34 @@ def download_dataset(
     logger.info(f"Local destination: {local_path}")
 
     try:
-        fs, path = fsspec.core.url_to_fs(dataset_url, anon=True)
-        remote_files = fs.glob(f"{path}/*.parquet")
+        if dataset_url.startswith(('http://', 'https://')):
+            fs, path = fsspec.core.url_to_fs(dataset_url)
+        elif dataset_url.startswith('gs://'):
+            fs, path = fsspec.core.url_to_fs(dataset_url, token='anon')
+        else:
+            fs, path = fsspec.core.url_to_fs(dataset_url, anon=True, timeout=30)
+
+        manifest_prefix = f"output/etl/parquet/{dataset}/"
+        dataset_files = [
+            key.replace(manifest_prefix, "")
+            for key in checksum_manifest.keys()
+            if key.startswith(manifest_prefix)
+        ]
+
+        if files_to_download:
+            files_to_process = [f for f in dataset_files if f in files_to_download]
+        else:
+            files_to_process = dataset_files
+
+        if not files_to_process:
+            logger.warning(f"No files found for dataset '{dataset}' in the checksum manifest.")
+            return local_path
+
+        # Now, construct the full remote paths
+        remote_files = [f"{dataset_url}/{fname}" for fname in files_to_process]
 
         if not remote_files:
-            logger.warning(f"No .parquet files found at {dataset_url}. Check the path and dataset name.")
+            logger.warning("No files matched the download criteria.")
             return local_path
 
         logger.info(f"Found {len(remote_files)} files to download for dataset '{dataset}'.")
@@ -345,12 +386,23 @@ def get_remote_dataset_urls(uri_template: str, version: str, dataset_name: str) 
     dataset_url = uri_template.format(version=version, dataset_name=dataset_name)
     logger.info(f"Finding remote file URLs for dataset '{dataset_name}' at: {dataset_url}")
     try:
-        fs, path = fsspec.core.url_to_fs(dataset_url, anon=True)
+        if dataset_url.startswith(('http://', 'https://')):
+            fs, path = fsspec.core.url_to_fs(dataset_url)
+        elif dataset_url.startswith('gs://'):
+            fs, path = fsspec.core.url_to_fs(dataset_url, token='anon')
+        else:
+            fs, path = fsspec.core.url_to_fs(dataset_url, anon=True, timeout=30)
+        # This function is now unused, as we get the file list from the manifest.
+        # However, we will keep it for now, in case we need it in the future.
+        # It will not work for GCS, as it requires listing the bucket.
+        if dataset_url.startswith('gs://'):
+            logger.warning("Listing remote files is not supported for GCS with anonymous access.")
+            return []
         # Use a protocol-aware join for full URLs
         protocol = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
-        base_url = f"{protocol}://{path}"
 
-        remote_files = sorted([f"{base_url}/{p.split('/')[-1]}" for p in fs.glob(f"{path}/*.parquet")])
+        # The glob returns paths relative to the host, so we need to prepend the protocol and host.
+        remote_files = sorted([f"{protocol}://{fs.host}/{p.lstrip('/')}" for p in fs.glob(f"{path}/*.parquet")])
 
         if not remote_files:
             logger.warning(f"No .parquet files found at {dataset_url}. Check the path and dataset name.")

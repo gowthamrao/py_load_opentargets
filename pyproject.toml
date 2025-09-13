@@ -43,6 +43,7 @@ test = [
     "s3fs>=2023.9.0",
     "fsspec>=2023.9.0",
     "toml>=0.10.2",
+    "gcsfs>=2023.9.0",
     "sqlalchemy>=2.0.43",
     "psycopg2-binary>=2.9.10",
 ]
@@ -67,6 +68,9 @@ testpaths = [
     "tests",
 ]
 pythonpath = "src"
+markers = [
+    "integration: marks tests as integration tests",
+]
 
 [tool.hatch.envs.test]
 features = ["test"]

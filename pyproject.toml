@@ -47,6 +47,7 @@ test = [
     "sqlalchemy>=2.0.43",
     "psycopg2-binary>=2.9.10",
     "pytest-cov",
+    "cython",
 ]
 
 [tool.poetry.group.docs.dependencies]
@@ -79,7 +80,6 @@ dev-mode = true
 
 [tool.hatch.envs.test.scripts]
 run = [
-  "pip install cython",
   "pip install --force-reinstall -e .",
   "pytest {args}",
 ]

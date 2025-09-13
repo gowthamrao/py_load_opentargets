@@ -1,4 +1,3 @@
-import os
 import pytest
 import psycopg
 from unittest.mock import MagicMock

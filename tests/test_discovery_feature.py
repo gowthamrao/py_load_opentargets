@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 
 from py_load_opentargets.data_acquisition import discover_datasets
-from py_load_opentargets.cli import cli, load_config
+from py_load_opentargets.cli import cli
 
 MOCK_CONFIG = {
     "source": {

@@ -3,6 +3,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import time
 from py_load_opentargets.backends.postgres import PostgresLoader
 from py_load_opentargets.data_acquisition import get_remote_schema
 
@@ -86,10 +87,6 @@ def test_generate_create_table_sql(loader):
 # --- Integration Tests ---
 # These tests require a running PostgreSQL database.
 # Set the DB_CONN_STR environment variable to run them.
-import os
-import psycopg
-import pyarrow.parquet as pq
-from pathlib import Path
 
 
 @pytest.fixture
@@ -104,8 +101,6 @@ def test_loader(db_conn):
     # Cleanup: rollback any transaction
     db_conn.rollback()
 
-
-import time
 
 def test_metadata_tracking(test_loader):
     """Tests the metadata creation and update functionality."""

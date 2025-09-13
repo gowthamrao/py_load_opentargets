@@ -1,12 +1,11 @@
 import psycopg
 from psycopg import sql
-import pyarrow.parquet as pq
 import pyarrow as pa
 import polars as pl
 import logging
 import io
 import json
-from typing import Dict, Any, Iterator, List, Optional
+from typing import Dict, Any, List, Optional
 
 from ..loader import DatabaseLoader
 
@@ -238,7 +237,7 @@ class PostgresLoader(DatabaseLoader):
         logger.info(f"Starting single-stream bulk load for '{table_name}'.")
 
         if not parquet_uris:
-            logger.warning(f"No .parquet files provided. Skipping bulk load.")
+            logger.warning("No .parquet files provided. Skipping bulk load.")
             return 0
 
         schema_overrides = self.dataset_config.get("schema_overrides", {})

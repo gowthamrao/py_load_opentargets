@@ -1,10 +1,8 @@
-import pytest
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pathlib import Path
 from unittest.mock import patch
 import hashlib
-import os
 
 from py_load_opentargets.orchestrator import ETLOrchestrator
 

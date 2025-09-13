@@ -2,7 +2,6 @@ import pytest
 from testcontainers.postgres import PostgresContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 import psycopg
-from psycopg import sql
 
 from py_load_opentargets.backends.postgres import PostgresLoader
 

@@ -78,6 +78,7 @@ dev-mode = true
 
 [tool.hatch.envs.test.scripts]
 run = [
+  "pip install cython",
   "pip install --force-reinstall -e .",
   "pytest {args}",
 ]

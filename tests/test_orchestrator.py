@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch, ANY
 import pyarrow as pa
 
-from py_load_opentargets.orchestrator import ETLOrchestrator
+from py_load_opentargets.orchestrator import ETLOrchestrator, get_db_loader_factory
 
 class TestETLOrchestrator(unittest.TestCase):
 
@@ -150,5 +150,55 @@ class TestETLOrchestrator(unittest.TestCase):
         self.mock_loader.update_metadata.assert_not_called()
         self.mock_loader.cleanup.assert_called_once()
 
+    def test_skip_already_loaded(self):
+        """Tests that a dataset is skipped if it's already loaded."""
+        self.mock_loader.get_last_successful_version.return_value = self.version
+        orchestrator = ETLOrchestrator(
+            config=self.mock_config,
+            datasets_to_process=['targets'],
+            version=self.version,
+            staging_schema=self.staging_schema,
+            final_schema=self.final_schema,
+            skip_confirmation=False
+        )
+        orchestrator.loader_factory = self.mock_loader_factory
+
+        with patch('py_load_opentargets.orchestrator.get_remote_dataset_urls', return_value=['fake_url']):
+            result = orchestrator._process_dataset(
+                'targets', 'fake_conn_str', 1, {}, 'stream', self.mock_config['source']['gcs_ftp']
+            )
+        self.assertIn("Skipped", result)
+
 if __name__ == '__main__':
     unittest.main()
+
+class TestGetDbLoaderFactory(unittest.TestCase):
+    def test_get_db_loader_factory_success(self):
+        """Tests that the correct loader factory is returned."""
+        mock_ep = MagicMock()
+        mock_ep.name = "postgres"
+        mock_ep.load.return_value = "dummy_loader"
+
+        with patch('py_load_opentargets.orchestrator.entry_points', return_value=[mock_ep]) as mock_eps:
+            factory = get_db_loader_factory("postgres")
+            self.assertEqual(factory, "dummy_loader")
+            mock_eps.assert_called_with(group='py_load_opentargets.backends')
+
+    def test_get_db_loader_factory_not_found(self):
+        """Tests that an error is raised when the backend is not found."""
+        with patch('py_load_opentargets.orchestrator.entry_points', return_value=[]):
+            with self.assertRaises(ValueError):
+                get_db_loader_factory("non_existent_backend")
+
+    def test_get_db_loader_factory_fallback(self):
+        """Tests the fallback for older Python versions."""
+        mock_ep = MagicMock()
+        mock_ep.name = "postgres"
+        mock_ep.load.return_value = "dummy_loader"
+
+        with patch('py_load_opentargets.orchestrator.entry_points') as mock_eps:
+            # Simulate Python < 3.10 behavior
+            mock_eps.side_effect = [TypeError, {'py_load_opentargets.backends': [mock_ep]}]
+            factory = get_db_loader_factory("postgres")
+            self.assertEqual(factory, "dummy_loader")
+            self.assertEqual(mock_eps.call_count, 2)

@@ -1,4 +1,3 @@
-import os
 import pytest
 import psycopg
 from unittest.mock import MagicMock
@@ -10,20 +9,18 @@ from py_load_opentargets.validator import ValidationService
 def minimal_config():
     """A minimal, valid config for testing."""
     return {
-        "source": {
-            "version_discovery_uri": "gs://open-targets/platform/"
-        },
+        "source": {"version_discovery_uri": "gs://open-targets/platform/"},
         "datasets": {
             "targets": {"primary_key": ["id"]},
-            "diseases": {"primary_key": ["id"]}
-        }
+            "diseases": {"primary_key": ["id"]},
+        },
     }
 
 
 def test_check_db_connection_success(mocker):
     """Test successful database connection validation."""
-    mocker.patch('os.getenv', return_value="postgresql://user:pass@host/db")
-    mock_connect = mocker.patch('psycopg.connect')
+    mocker.patch("os.getenv", return_value="postgresql://user:pass@host/db")
+    mock_connect = mocker.patch("psycopg.connect")
     mock_conn = MagicMock()
     mock_cursor = MagicMock()
     mock_cursor.fetchone.return_value = (1,)
@@ -39,7 +36,7 @@ def test_check_db_connection_success(mocker):
 
 def test_check_db_connection_failure_no_env(mocker):
     """Test failure when DB_CONN_STR is not set."""
-    mocker.patch('os.getenv', return_value=None)
+    mocker.patch("os.getenv", return_value=None)
     validator = ValidationService({})
     result = validator.check_db_connection()
 
@@ -49,8 +46,10 @@ def test_check_db_connection_failure_no_env(mocker):
 
 def test_check_db_connection_failure_exception(mocker):
     """Test failure when psycopg.connect raises an exception."""
-    mocker.patch('os.getenv', return_value="postgresql://user:pass@host/db")
-    mocker.patch('psycopg.connect', side_effect=psycopg.OperationalError("Test connection error"))
+    mocker.patch("os.getenv", return_value="postgresql://user:pass@host/db")
+    mocker.patch(
+        "psycopg.connect", side_effect=psycopg.OperationalError("Test connection error")
+    )
 
     validator = ValidationService({})
     result = validator.check_db_connection()
@@ -61,7 +60,10 @@ def test_check_db_connection_failure_exception(mocker):
 
 def test_check_source_connection_success(mocker, minimal_config):
     """Test successful source connection validation."""
-    mocker.patch('py_load_opentargets.validator.list_available_versions', return_value=['24.06', '24.03'])
+    mocker.patch(
+        "py_load_opentargets.validator.list_available_versions",
+        return_value=["24.06", "24.03"],
+    )
     validator = ValidationService(minimal_config)
     result = validator.check_source_connection()
 
@@ -71,7 +73,9 @@ def test_check_source_connection_success(mocker, minimal_config):
 
 def test_check_source_connection_failure_no_versions(mocker, minimal_config):
     """Test failure when no versions are found."""
-    mocker.patch('py_load_opentargets.validator.list_available_versions', return_value=[])
+    mocker.patch(
+        "py_load_opentargets.validator.list_available_versions", return_value=[]
+    )
     validator = ValidationService(minimal_config)
     result = validator.check_source_connection()
 
@@ -81,7 +85,10 @@ def test_check_source_connection_failure_no_versions(mocker, minimal_config):
 
 def test_check_source_connection_failure_exception(mocker, minimal_config):
     """Test failure when list_available_versions raises an exception."""
-    mocker.patch('py_load_opentargets.validator.list_available_versions', side_effect=Exception("Test source error"))
+    mocker.patch(
+        "py_load_opentargets.validator.list_available_versions",
+        side_effect=Exception("Test source error"),
+    )
     validator = ValidationService(minimal_config)
     result = validator.check_source_connection()
 
@@ -103,7 +110,7 @@ def test_check_dataset_definitions_failure_missing_pk():
     invalid_config = {
         "datasets": {
             "targets": {"primary_key": ["id"]},
-            "diseases": {} # Missing primary_key
+            "diseases": {},  # Missing primary_key
         }
     }
     validator = ValidationService(invalid_config)

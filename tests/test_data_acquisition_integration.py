@@ -1,9 +1,11 @@
 import pytest
 from pathlib import Path
-import os
 import hashlib
 
-from py_load_opentargets.data_acquisition import list_available_versions, get_checksum_manifest, download_dataset
+from py_load_opentargets.data_acquisition import (
+    list_available_versions,
+    get_checksum_manifest,
+)
 
 # --- Configuration ---
 
@@ -12,22 +14,25 @@ FTP_HOST = "ftp.ebi.ac.uk"
 FTP_PATH = "/pub/databases/opentargets/platform/"
 
 # A specific version and a small dataset for testing
-TEST_VERSION = "24.06" # A reasonably old but stable version
+TEST_VERSION = "24.06"  # A reasonably old but stable version
 
 # --- Helper Functions ---
+
 
 def calculate_sha1(filepath: Path) -> str:
     """Calculates the SHA1 hash of a file."""
     sha1 = hashlib.sha1()
-    with open(filepath, 'rb') as f:
+    with open(filepath, "rb") as f:
         while True:
-            data = f.read(65536) # Read in 64k chunks
+            data = f.read(65536)  # Read in 64k chunks
             if not data:
                 break
             sha1.update(data)
     return sha1.hexdigest()
 
+
 # --- Integration Tests ---
+
 
 @pytest.mark.integration
 @pytest.mark.skip(reason="FTP server is flaky and causes intermittent test failures.")
@@ -40,9 +45,10 @@ def test_list_versions_from_real_ftp():
     assert versions is not None
     assert len(versions) > 0
     # Check if a known version format is present
-    assert all(v.replace('.', '').isdigit() for v in versions)
+    assert all(v.replace(".", "").isdigit() for v in versions)
     # Check for descending order
     assert versions == sorted(versions, reverse=True)
+
 
 @pytest.mark.integration
 @pytest.mark.skip(reason="FTP server is flaky and causes intermittent test failures.")

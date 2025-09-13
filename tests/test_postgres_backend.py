@@ -3,31 +3,38 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import time
 from py_load_opentargets.backends.postgres import PostgresLoader
 from py_load_opentargets.data_acquisition import get_remote_schema
+
 
 @pytest.fixture
 def loader():
     """Returns an instance of PostgresLoader."""
     return PostgresLoader()
 
+
 # Test type mapping
-@pytest.mark.parametrize("arrow_type, pg_type", [
-    (pa.string(), "TEXT"),
-    (pa.large_string(), "TEXT"),
-    (pa.int8(), "BIGINT"),
-    (pa.int64(), "BIGINT"),
-    (pa.float32(), "DOUBLE PRECISION"),
-    (pa.float64(), "DOUBLE PRECISION"),
-    (pa.bool_(), "BOOLEAN"),
-    (pa.timestamp('us'), "TIMESTAMP"),
-    (pa.date32(), "DATE"),
-    (pa.struct([pa.field('a', pa.int32())]), "JSONB"),
-    (pa.list_(pa.string()), "JSONB"),
-])
+@pytest.mark.parametrize(
+    "arrow_type, pg_type",
+    [
+        (pa.string(), "TEXT"),
+        (pa.large_string(), "TEXT"),
+        (pa.int8(), "BIGINT"),
+        (pa.int64(), "BIGINT"),
+        (pa.float32(), "DOUBLE PRECISION"),
+        (pa.float64(), "DOUBLE PRECISION"),
+        (pa.bool_(), "BOOLEAN"),
+        (pa.timestamp("us"), "TIMESTAMP"),
+        (pa.date32(), "DATE"),
+        (pa.struct([pa.field("a", pa.int32())]), "JSONB"),
+        (pa.list_(pa.string()), "JSONB"),
+    ],
+)
 def test_pyarrow_to_postgres_type(loader, arrow_type, pg_type):
     """Tests the PyArrow to PostgreSQL type mapping."""
     assert loader._pyarrow_to_postgres_type(arrow_type) == pg_type
+
 
 # Test CREATE TABLE statement generation
 def test_bulk_load_native_streaming_from_remote(loader, mocker):
@@ -38,12 +45,12 @@ def test_bulk_load_native_streaming_from_remote(loader, mocker):
     # 1. Setup
     fake_urls = ["http://a/data1.parquet", "http://a/data2.parquet"]
     dummy_schema = pa.schema([pa.field("id", pa.int64())])
-    dummy_lazyframe = MagicMock() # Mock Polars LazyFrame
+    dummy_lazyframe = MagicMock()  # Mock Polars LazyFrame
 
     # Mock polars.scan_parquet to return our dummy LazyFrame
     mock_scan_parquet = mocker.patch(
         "py_load_opentargets.backends.postgres.pl.scan_parquet",
-        return_value=dummy_lazyframe
+        return_value=dummy_lazyframe,
     )
 
     # Mock the database connection
@@ -64,32 +71,33 @@ def test_bulk_load_native_streaming_from_remote(loader, mocker):
 
 def test_generate_create_table_sql(loader):
     """Tests the generation of a CREATE TABLE SQL statement."""
-    schema = pa.schema([
-        pa.field("id", pa.string()),
-        pa.field("value", pa.int64()),
-        pa.field("nested_data", pa.struct([pa.field('a', pa.int32())]))
-    ])
+    schema = pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("value", pa.int64()),
+            pa.field("nested_data", pa.struct([pa.field("a", pa.int32())])),
+        ]
+    )
     table_name = "my_test_table"
 
-    expected_sql = '''CREATE TABLE my_test_table (
+    expected_sql = """CREATE TABLE my_test_table (
   "id" TEXT,
   "value" BIGINT,
   "nested_data" JSONB
-);'''
+);"""
 
     # The new default is to convert structs to JSON, which means the
     # transformed schema will have a string type, which maps to JSONB.
     transformed_schema = loader._get_transformed_schema(schema)
-    generated_sql = loader._generate_create_table_sql(table_name, transformed_schema, schema_overrides={})
+    generated_sql = loader._generate_create_table_sql(
+        table_name, transformed_schema, schema_overrides={}
+    )
     assert " ".join(generated_sql.split()) == " ".join(expected_sql.split())
+
 
 # --- Integration Tests ---
 # These tests require a running PostgreSQL database.
 # Set the DB_CONN_STR environment variable to run them.
-import os
-import psycopg
-import pyarrow.parquet as pq
-from pathlib import Path
 
 
 @pytest.fixture
@@ -104,8 +112,6 @@ def test_loader(db_conn):
     # Cleanup: rollback any transaction
     db_conn.rollback()
 
-
-import time
 
 def test_metadata_tracking(test_loader):
     """Tests the metadata creation and update functionality."""
@@ -123,7 +129,9 @@ def test_metadata_tracking(test_loader):
     assert last_version == version
 
     # Verify all fields, including timestamps
-    test_loader.cursor.execute("SELECT status, error_message, start_time, end_time FROM _ot_load_metadata WHERE status='success' ORDER BY id DESC LIMIT 1;")
+    test_loader.cursor.execute(
+        "SELECT status, error_message, start_time, end_time FROM _ot_load_metadata WHERE status='success' ORDER BY id DESC LIMIT 1;"
+    )
     status, msg, db_start, db_end = test_loader.cursor.fetchone()
     assert status == "success"
     assert msg is None
@@ -131,13 +139,18 @@ def test_metadata_tracking(test_loader):
     assert db_end is not None
 
     # Test failure logging
-    test_loader.update_metadata(version, dataset, False, 0, start_time, end_time, "A test error")
-    test_loader.cursor.execute("SELECT status, error_message, start_time, end_time FROM _ot_load_metadata WHERE status='failure' ORDER BY id DESC LIMIT 1;")
+    test_loader.update_metadata(
+        version, dataset, False, 0, start_time, end_time, "A test error"
+    )
+    test_loader.cursor.execute(
+        "SELECT status, error_message, start_time, end_time FROM _ot_load_metadata WHERE status='failure' ORDER BY id DESC LIMIT 1;"
+    )
     status, msg, db_start, db_end = test_loader.cursor.fetchone()
     assert status == "failure"
     assert msg == "A test error"
     assert db_start is not None
     assert db_end is not None
+
 
 def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
     """Tests the full merge strategy: initial load and then an upsert."""
@@ -156,7 +169,7 @@ def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
 
     # --- 1. Initial Load ---
     # Create a dummy parquet file for the initial load
-    initial_data = pa.Table.from_pydict({'id': [1, 2], 'data': ['a', 'b']})
+    initial_data = pa.Table.from_pydict({"id": [1, 2], "data": ["a", "b"]})
     parquet_path = tmp_path / "initial"
     parquet_path.mkdir()
     pq.write_table(initial_data, parquet_path / "data.parquet")
@@ -173,11 +186,13 @@ def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
     # Verify initial load
     test_loader.cursor.execute(f"SELECT id, data FROM {final_table} ORDER BY id;")
     result = test_loader.cursor.fetchall()
-    assert result == [(1, 'a'), (2, 'b')]
+    assert result == [(1, "a"), (2, "b")]
 
     # --- 2. Upsert Load ---
     # Create a new parquet file with updated and new data
-    upsert_data = pa.Table.from_pydict({'id': [2, 3], 'data': ['x', 'c']}) # Update id=2, insert id=3
+    upsert_data = pa.Table.from_pydict(
+        {"id": [2, 3], "data": ["x", "c"]}
+    )  # Update id=2, insert id=3
     parquet_path_upsert = tmp_path / "upsert"
     parquet_path_upsert.mkdir()
     pq.write_table(upsert_data, parquet_path_upsert / "data.parquet")
@@ -195,7 +210,7 @@ def test_merge_strategy_initial_and_upsert(test_loader, tmp_path: Path):
     test_loader.cursor.execute(f"SELECT id, data FROM {final_table} ORDER BY id;")
     result = test_loader.cursor.fetchall()
     # With the new DELETE logic, record 1 should be removed as it's not in the second load.
-    assert result == [(2, 'x'), (3, 'c')]
+    assert result == [(2, "x"), (3, "c")]
 
 
 def test_merge_strategy_handles_deletes(test_loader, tmp_path: Path):
@@ -214,12 +229,14 @@ def test_merge_strategy_handles_deletes(test_loader, tmp_path: Path):
     test_loader.conn.commit()
 
     # --- 1. Initial Load (with 3 records) ---
-    initial_data = pa.Table.from_pydict({'id': [1, 2, 3], 'data': ['a', 'b', 'c']})
+    initial_data = pa.Table.from_pydict({"id": [1, 2, 3], "data": ["a", "b", "c"]})
     parquet_path_initial = tmp_path / "initial"
     parquet_path_initial.mkdir()
     pq.write_table(initial_data, parquet_path_initial / "data.parquet")
 
-    urls_initial = [f"file://{p}" for p in sorted(parquet_path_initial.glob("*.parquet"))]
+    urls_initial = [
+        f"file://{p}" for p in sorted(parquet_path_initial.glob("*.parquet"))
+    ]
     schema_initial = get_remote_schema(urls_initial)
     test_loader.prepare_staging_table(staging_table, schema_initial)
     test_loader.bulk_load_native(staging_table, urls_initial, schema_initial)
@@ -228,11 +245,11 @@ def test_merge_strategy_handles_deletes(test_loader, tmp_path: Path):
     # Verify initial load
     test_loader.cursor.execute(f"SELECT id, data FROM {final_table} ORDER BY id;")
     result = test_loader.cursor.fetchall()
-    assert result == [(1, 'a'), (2, 'b'), (3, 'c')]
+    assert result == [(1, "a"), (2, "b"), (3, "c")]
     assert len(result) == 3
 
     # --- 2. Second Load (record 'b' is now missing) ---
-    second_load_data = pa.Table.from_pydict({'id': [1, 3], 'data': ['a_updated', 'c']})
+    second_load_data = pa.Table.from_pydict({"id": [1, 3], "data": ["a_updated", "c"]})
     parquet_path_second = tmp_path / "second"
     parquet_path_second.mkdir()
     pq.write_table(second_load_data, parquet_path_second / "data.parquet")
@@ -246,7 +263,7 @@ def test_merge_strategy_handles_deletes(test_loader, tmp_path: Path):
     # Verify that record 2 was deleted and record 1 was updated
     test_loader.cursor.execute(f"SELECT id, data FROM {final_table} ORDER BY id;")
     result = test_loader.cursor.fetchall()
-    assert result == [(1, 'a_updated'), (3, 'c')]
+    assert result == [(1, "a_updated"), (3, "c")]
     assert len(result) == 2
 
 
@@ -264,16 +281,15 @@ def test_schema_alignment(test_loader, tmp_path: Path):
     test_loader.cursor.execute(f"DROP TABLE IF EXISTS {final_table};")
 
     # 1. Create a final table with an "old" schema
-    test_loader.cursor.execute(f'CREATE TABLE {final_table} ("id" INT PRIMARY KEY, "data" TEXT);')
+    test_loader.cursor.execute(
+        f'CREATE TABLE {final_table} ("id" INT PRIMARY KEY, "data" TEXT);'
+    )
     test_loader.conn.commit()
 
     # 2. Create a staging table from a parquet file with a "new" schema
-    new_schema_data = pa.Table.from_pydict({
-        'id': [1],
-        'data': ['a'],
-        'new_text_col': ['new'],
-        'new_int_col': [123]
-    })
+    new_schema_data = pa.Table.from_pydict(
+        {"id": [1], "data": ["a"], "new_text_col": ["new"], "new_int_col": [123]}
+    )
     parquet_path = tmp_path / "new_schema"
     parquet_path.mkdir()
     pq.write_table(new_schema_data, parquet_path / "data.parquet")
@@ -316,17 +332,23 @@ def test_index_management_during_merge(test_loader, tmp_path: Path):
     test_loader.cursor.execute(f"DROP TABLE IF EXISTS {final_table};")
 
     # 1. Create a final table and add a non-PK index
-    test_loader.cursor.execute(f'CREATE TABLE {final_table} ("id" INT PRIMARY KEY, "data" TEXT, "indexed_col" TEXT);')
-    test_loader.cursor.execute(f'CREATE INDEX my_test_idx ON {final_table} ("indexed_col");')
+    test_loader.cursor.execute(
+        f'CREATE TABLE {final_table} ("id" INT PRIMARY KEY, "data" TEXT, "indexed_col" TEXT);'
+    )
+    test_loader.cursor.execute(
+        f'CREATE INDEX my_test_idx ON {final_table} ("indexed_col");'
+    )
     test_loader.conn.commit()
 
     # Verify index exists before we start
     indexes = test_loader.get_table_indexes(final_table)
     assert len(indexes) == 1
-    assert indexes[0]['name'] == 'my_test_idx'
+    assert indexes[0]["name"] == "my_test_idx"
 
     # 2. Prepare staging table with data
-    staging_data = pa.Table.from_pydict({'id': [1], 'data': ['a'], 'indexed_col': ['b']})
+    staging_data = pa.Table.from_pydict(
+        {"id": [1], "data": ["a"], "indexed_col": ["b"]}
+    )
     parquet_path = tmp_path / "index_data"
     parquet_path.mkdir()
     pq.write_table(staging_data, parquet_path / "data.parquet")
@@ -337,9 +359,14 @@ def test_index_management_during_merge(test_loader, tmp_path: Path):
     test_loader.bulk_load_native(staging_table, urls, schema)
 
     # 3. Spy on the index methods and run the merge
-    with patch.object(test_loader, 'drop_indexes', wraps=test_loader.drop_indexes) as spy_drop, \
-         patch.object(test_loader, 'recreate_indexes', wraps=test_loader.recreate_indexes) as spy_recreate:
-
+    with (
+        patch.object(
+            test_loader, "drop_indexes", wraps=test_loader.drop_indexes
+        ) as spy_drop,
+        patch.object(
+            test_loader, "recreate_indexes", wraps=test_loader.recreate_indexes
+        ) as spy_recreate,
+    ):
         # This block simulates the orchestrator's logic
         indexes_to_manage = test_loader.get_table_indexes(final_table)
         try:
@@ -355,4 +382,4 @@ def test_index_management_during_merge(test_loader, tmp_path: Path):
     # 5. Verify the index exists again on the actual table
     final_indexes = test_loader.get_table_indexes(final_table)
     assert len(final_indexes) == 1
-    assert final_indexes[0]['name'] == 'my_test_idx'
+    assert final_indexes[0]["name"] == "my_test_idx"

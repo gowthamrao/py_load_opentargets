@@ -1,4 +1,3 @@
-import os
 import logging
 import collections.abc
 from typing import Dict, Any, Optional
@@ -42,14 +41,18 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     global _config
 
     # Load default config from package resources
-    with resources.files('py_load_opentargets').joinpath('default_config.toml').open('rb') as f:
+    with (
+        resources.files("py_load_opentargets")
+        .joinpath("default_config.toml")
+        .open("rb") as f
+    ):
         default_config = tomllib.load(f)
 
     # If a user config is provided, load it and merge
     if config_path:
         logger.info(f"Loading user-provided configuration from: {config_path}")
         try:
-            with open(config_path, 'rb') as f:
+            with open(config_path, "rb") as f:
                 user_config = tomllib.load(f)
             # Deep merge user config into the default config
             _config = deep_merge(default_config, user_config)
@@ -65,8 +68,8 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
     # --- Dynamic Source Provider Logic ---
     # After merging, resolve the source provider to flatten the URI keys.
-    source_config = _config.get('source', {})
-    provider = source_config.get('provider')
+    source_config = _config.get("source", {})
+    provider = source_config.get("provider")
 
     if provider and provider in source_config:
         logger.info(f"Resolving source configuration for provider: '{provider}'")
@@ -82,6 +85,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     # --- End Dynamic Source Provider Logic ---
 
     return _config
+
 
 def get_config() -> Dict[str, Any]:
     """

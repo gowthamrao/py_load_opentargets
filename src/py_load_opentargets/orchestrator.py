@@ -27,10 +27,10 @@ def get_db_loader_factory(backend_name: str) -> Callable[[], DatabaseLoader]:
     logger.info(f"Looking for database backend '{backend_name}'...")
     try:
         # For Python 3.10+
-        eps = entry_points(group='py_load_opentargets.backends')
+        eps = entry_points(group="py_load_opentargets.backends")
     except TypeError:
         # Fallback for Python < 3.10
-        eps = entry_points()['py_load_opentargets.backends']
+        eps = entry_points()["py_load_opentargets.backends"]
 
     for ep in eps:
         if ep.name == backend_name:
@@ -65,7 +65,7 @@ class ETLOrchestrator:
         self.load_type = load_type
         self.checksum_manifest = {}
 
-        db_backend = self.config.get('database', {}).get('backend', 'postgres')
+        db_backend = self.config.get("database", {}).get("backend", "postgres")
         self.loader_factory = get_db_loader_factory(db_backend)
 
     def _process_dataset(
@@ -102,7 +102,9 @@ class ETLOrchestrator:
                 "final_table_name", dataset_name.replace("-", "_")
             )
             final_table_full_name = f"{self.final_schema}.{final_table}"
-            staging_table_name = f"{self.staging_schema}.{dataset_name.replace('-', '_')}"
+            staging_table_name = (
+                f"{self.staging_schema}.{dataset_name.replace('-', '_')}"
+            )
 
             logger.info(f"Processing dataset: {dataset_name} in thread")
 
@@ -122,7 +124,9 @@ class ETLOrchestrator:
                     uri_template, self.version, dataset_name
                 )
                 if not parquet_uris:
-                    logger.warning(f"No remote files found for {dataset_name}, skipping.")
+                    logger.warning(
+                        f"No remote files found for {dataset_name}, skipping."
+                    )
                     return f"Skipped: {dataset_name} - No files found."
 
                 # Verify checksums for all remote files before processing.
@@ -139,11 +143,14 @@ class ETLOrchestrator:
                     staging_table_name, parquet_uris, schema
                 )
 
-            else: # 'download' strategy
+            else:  # 'download' strategy
                 logger.info(f"Using 'download' strategy for dataset '{dataset_name}'.")
                 with tempfile.TemporaryDirectory() as temp_dir_str:
                     temp_dir = Path(temp_dir_str)
-                    download_uri_template = source_config.get('data_download_uri_template') or source_config['data_uri_template']
+                    download_uri_template = (
+                        source_config.get("data_download_uri_template")
+                        or source_config["data_uri_template"]
+                    )
                     parquet_path = download_dataset(
                         download_uri_template,
                         self.version,
@@ -154,23 +161,33 @@ class ETLOrchestrator:
                     )
 
                     # Still use the new loader functions, but with local file paths
-                    parquet_uris = [f"file://{p}" for p in sorted(parquet_path.glob("*.parquet"))]
+                    parquet_uris = [
+                        f"file://{p}" for p in sorted(parquet_path.glob("*.parquet"))
+                    ]
                     if not parquet_uris:
-                        logger.warning(f"No local files found for {dataset_name}, skipping.")
+                        logger.warning(
+                            f"No local files found for {dataset_name}, skipping."
+                        )
                         return f"Skipped: {dataset_name} - No files found."
 
                     schema = get_remote_schema(parquet_uris)
                     loader.prepare_staging_table(staging_table_name, schema)
-                    row_count = loader.bulk_load_native(staging_table_name, parquet_uris, schema)
+                    row_count = loader.bulk_load_native(
+                        staging_table_name, parquet_uris, schema
+                    )
 
             # Based on the load type, choose the finalization strategy
             if self.load_type == "full-refresh":
-                logger.info(f"Using 'full-refresh' strategy for final table '{final_table_full_name}'.")
+                logger.info(
+                    f"Using 'full-refresh' strategy for final table '{final_table_full_name}'."
+                )
                 loader.full_refresh_from_staging(
                     staging_table_name, final_table_full_name, primary_keys
                 )
             else:
-                logger.info(f"Using 'delta' merge strategy for final table '{final_table_full_name}'.")
+                logger.info(
+                    f"Using 'delta' merge strategy for final table '{final_table_full_name}'."
+                )
                 indexes = []
                 foreign_keys = []
                 try:
@@ -181,7 +198,9 @@ class ETLOrchestrator:
                         # Get and drop FKs first
                         foreign_keys = loader.get_foreign_keys(final_table_full_name)
                         if foreign_keys:
-                            loader.drop_foreign_keys(final_table_full_name, foreign_keys)
+                            loader.drop_foreign_keys(
+                                final_table_full_name, foreign_keys
+                            )
 
                         # Get and drop indexes
                         indexes = loader.get_table_indexes(final_table_full_name)
@@ -196,7 +215,9 @@ class ETLOrchestrator:
                     if indexes:
                         loader.recreate_indexes(indexes)
                     if foreign_keys:
-                        loader.recreate_foreign_keys(final_table_full_name, foreign_keys)
+                        loader.recreate_foreign_keys(
+                            final_table_full_name, foreign_keys
+                        )
 
             end_time = time.time()
             loader.update_metadata(
@@ -217,15 +238,27 @@ class ETLOrchestrator:
                 try:
                     loader.conn.rollback()
                 except Exception as rollback_exc:
-                    logger.error(f"Failed to rollback transaction for '{dataset_name}': {rollback_exc}")
+                    logger.error(
+                        f"Failed to rollback transaction for '{dataset_name}': {rollback_exc}"
+                    )
 
-            logger.error(f"Error processing dataset '{dataset_name}': {e}", exc_info=True)
-            error_message = str(e).replace('\n', ' ').strip()
-            loader.update_metadata(version=self.version, dataset=dataset_name, success=False, row_count=0, start_time=start_time, end_time=end_time, error_message=error_message)
+            logger.error(
+                f"Error processing dataset '{dataset_name}': {e}", exc_info=True
+            )
+            error_message = str(e).replace("\n", " ").strip()
+            loader.update_metadata(
+                version=self.version,
+                dataset=dataset_name,
+                success=False,
+                row_count=0,
+                start_time=start_time,
+                end_time=end_time,
+                error_message=error_message,
+            )
             # Re-raise the exception so the main thread can handle it
             raise e
         finally:
-            if 'loader' in locals() and loader:
+            if "loader" in locals() and loader:
                 loader.cleanup()
 
     def run(self):
@@ -244,7 +277,9 @@ class ETLOrchestrator:
         source_provider = self.config["source"].get("provider", "gcs_ftp")
         source_config = self.config["source"].get(source_provider)
         if not source_config:
-            raise ValueError(f"Configuration for source provider '{source_provider}' not found.")
+            raise ValueError(
+                f"Configuration for source provider '{source_provider}' not found."
+            )
 
         logger.info(f"Using source provider: '{source_provider}'")
         logger.info(f"Using load strategy: '{load_strategy}'")
@@ -307,7 +342,12 @@ class ETLOrchestrator:
             logger.info("Running sequentially with a single worker.")
             for dataset in self.datasets_to_process:
                 self._process_dataset(
-                    dataset, db_conn_str, max_workers, self.checksum_manifest, load_strategy, source_config
+                    dataset,
+                    db_conn_str,
+                    max_workers,
+                    self.checksum_manifest,
+                    load_strategy,
+                    source_config,
                 )
 
         logger.info("\n--- Full Process Complete ---")

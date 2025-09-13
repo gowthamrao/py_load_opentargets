@@ -13,7 +13,9 @@ class DatabaseLoader(abc.ABC):
     """
 
     @abc.abstractmethod
-    def connect(self, conn_str: str, dataset_config: Optional[Dict[str, Any]] = None) -> None:
+    def connect(
+        self, conn_str: str, dataset_config: Optional[Dict[str, Any]] = None
+    ) -> None:
         """
         Establish a connection to the target database.
 
@@ -34,7 +36,9 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def drop_foreign_keys(self, table_name: str, foreign_keys: List[Dict[str, str]]) -> None:
+    def drop_foreign_keys(
+        self, table_name: str, foreign_keys: List[Dict[str, str]]
+    ) -> None:
         """
         Drops a list of foreign key constraints.
 
@@ -44,7 +48,9 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def recreate_foreign_keys(self, table_name: str, foreign_keys: List[Dict[str, str]]) -> None:
+    def recreate_foreign_keys(
+        self, table_name: str, foreign_keys: List[Dict[str, str]]
+    ) -> None:
         """
         Recreates a list of foreign key constraints from their DDL definitions.
 
@@ -71,7 +77,14 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def update_metadata(self, version: str, dataset: str, success: bool, row_count: int, error_message: Optional[str] = None) -> None:
+    def update_metadata(
+        self,
+        version: str,
+        dataset: str,
+        success: bool,
+        row_count: int,
+        error_message: Optional[str] = None,
+    ) -> None:
         """
         Record the outcome of a load operation in a metadata table.
 
@@ -104,7 +117,9 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def bulk_load_native(self, table_name: str, parquet_uris: List[str], schema: pa.Schema) -> int:
+    def bulk_load_native(
+        self, table_name: str, parquet_uris: List[str], schema: pa.Schema
+    ) -> int:
         """
         Load data from a list of fsspec-compatible Parquet URIs into a table
         using the database's most efficient, native bulk loading mechanism.
@@ -166,7 +181,9 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def execute_merge_strategy(self, staging_table: str, final_table: str, primary_keys: List[str]) -> None:
+    def execute_merge_strategy(
+        self, staging_table: str, final_table: str, primary_keys: List[str]
+    ) -> None:
         """
         Execute the SQL logic to merge data from a staging table to a final table.
         This should handle both initial creation of the final table and subsequent
@@ -179,7 +196,9 @@ class DatabaseLoader(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def full_refresh_from_staging(self, staging_table: str, final_table: str, primary_keys: List[str]) -> None:
+    def full_refresh_from_staging(
+        self, staging_table: str, final_table: str, primary_keys: List[str]
+    ) -> None:
         """
         Performs a full refresh of the final table from the staging table.
 

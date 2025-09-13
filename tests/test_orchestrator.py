@@ -4,53 +4,57 @@ import pyarrow as pa
 
 from py_load_opentargets.orchestrator import ETLOrchestrator, get_db_loader_factory
 
-class TestETLOrchestrator(unittest.TestCase):
 
+class TestETLOrchestrator(unittest.TestCase):
     def setUp(self):
         """Set up a mock loader and config for all tests."""
         self.mock_loader = MagicMock()
         self.mock_loader_factory = MagicMock(return_value=self.mock_loader)
 
         self.mock_config = {
-            'execution': {
-                'max_workers': 1,
-                'load_strategy': 'stream' # Default to new strategy
+            "execution": {
+                "max_workers": 1,
+                "load_strategy": "stream",  # Default to new strategy
             },
-            'database': {
-                'backend': 'postgres'
-            },
-            'source': {
-                'provider': 'gcs_ftp',
-                'gcs_ftp': {
-                    'data_uri_template': 'http://fake/{version}/{dataset_name}',
-                    'data_download_uri_template': 'gcs://fake-bucket/{version}/{dataset_name}/',
-                    'checksum_uri_template': 'gcs://fake-checksums/{version}/'
-                }
-            },
-            'datasets': {
-                'targets': {
-                    'primary_key': ['id'],
-                    'final_table_name': 'targets_final'
+            "database": {"backend": "postgres"},
+            "source": {
+                "provider": "gcs_ftp",
+                "gcs_ftp": {
+                    "data_uri_template": "http://fake/{version}/{dataset_name}",
+                    "data_download_uri_template": "gcs://fake-bucket/{version}/{dataset_name}/",
+                    "checksum_uri_template": "gcs://fake-checksums/{version}/",
                 },
-                'diseases': {
-                    'primary_key': ['id']
-                }
-            }
+            },
+            "datasets": {
+                "targets": {"primary_key": ["id"], "final_table_name": "targets_final"},
+                "diseases": {"primary_key": ["id"]},
+            },
         }
         self.version = "22.04"
         self.staging_schema = "staging"
         self.final_schema = "public"
 
-    @patch('py_load_opentargets.orchestrator.verify_remote_dataset')
-    @patch('py_load_opentargets.orchestrator.get_remote_schema')
-    @patch('py_load_opentargets.orchestrator.get_remote_dataset_urls')
-    @patch('py_load_opentargets.orchestrator.get_checksum_manifest')
-    @patch('py_load_opentargets.orchestrator.os.getenv')
-    def test_run_happy_path_stream_strategy(self, mock_getenv, mock_get_checksums, mock_get_urls, mock_get_schema, mock_verify_remote):
+    @patch("py_load_opentargets.orchestrator.verify_remote_dataset")
+    @patch("py_load_opentargets.orchestrator.get_remote_schema")
+    @patch("py_load_opentargets.orchestrator.get_remote_dataset_urls")
+    @patch("py_load_opentargets.orchestrator.get_checksum_manifest")
+    @patch("py_load_opentargets.orchestrator.os.getenv")
+    def test_run_happy_path_stream_strategy(
+        self,
+        mock_getenv,
+        mock_get_checksums,
+        mock_get_urls,
+        mock_get_schema,
+        mock_verify_remote,
+    ):
         """Test a successful run using the 'stream' strategy."""
         # Arrange
-        mock_getenv.side_effect = lambda key: "fake_db_conn_str" if key == "DB_CONN_STR" else None
-        mock_get_checksums.return_value = {"output/etl/parquet/targets/file1.parquet": "dummy_hash"}
+        mock_getenv.side_effect = (
+            lambda key: "fake_db_conn_str" if key == "DB_CONN_STR" else None
+        )
+        mock_get_checksums.return_value = {
+            "output/etl/parquet/targets/file1.parquet": "dummy_hash"
+        }
         mock_get_urls.return_value = ["http://fake/file1.parquet"]
         mock_get_schema.return_value = pa.schema([pa.field("id", pa.int64())])
         self.mock_loader.get_last_successful_version.return_value = None
@@ -58,10 +62,10 @@ class TestETLOrchestrator(unittest.TestCase):
 
         orchestrator = ETLOrchestrator(
             config=self.mock_config,
-            datasets_to_process=['targets'],
+            datasets_to_process=["targets"],
             version=self.version,
             staging_schema=self.staging_schema,
-            final_schema=self.final_schema
+            final_schema=self.final_schema,
         )
         orchestrator.loader_factory = self.mock_loader_factory
 
@@ -69,28 +73,47 @@ class TestETLOrchestrator(unittest.TestCase):
         orchestrator.run()
 
         # Assert
-        mock_get_urls.assert_called_once_with(ANY, self.version, 'targets')
+        mock_get_urls.assert_called_once_with(ANY, self.version, "targets")
         mock_get_schema.assert_called_once_with(["http://fake/file1.parquet"])
         self.mock_loader.connect.assert_called_once_with("fake_db_conn_str", ANY)
-        self.mock_loader.prepare_staging_table.assert_called_once_with(ANY, mock_get_schema.return_value)
-        self.mock_loader.bulk_load_native.assert_called_once_with(ANY, ["http://fake/file1.parquet"], mock_get_schema.return_value)
+        self.mock_loader.prepare_staging_table.assert_called_once_with(
+            ANY, mock_get_schema.return_value
+        )
+        self.mock_loader.bulk_load_native.assert_called_once_with(
+            ANY, ["http://fake/file1.parquet"], mock_get_schema.return_value
+        )
         self.mock_loader.execute_merge_strategy.assert_called_once()
         self.mock_loader.update_metadata.assert_called_once_with(
-            version=self.version, dataset='targets', success=True, row_count=ANY,
-            start_time=ANY, end_time=ANY
+            version=self.version,
+            dataset="targets",
+            success=True,
+            row_count=ANY,
+            start_time=ANY,
+            end_time=ANY,
         )
         self.mock_loader.cleanup.assert_called_once()
 
-    @patch('py_load_opentargets.orchestrator.verify_remote_dataset')
-    @patch('py_load_opentargets.orchestrator.get_remote_schema')
-    @patch('py_load_opentargets.orchestrator.get_remote_dataset_urls')
-    @patch('py_load_opentargets.orchestrator.get_checksum_manifest')
-    @patch('py_load_opentargets.orchestrator.os.getenv')
-    def test_run_error_handling_stream_strategy(self, mock_getenv, mock_get_checksums, mock_get_urls, mock_get_schema, mock_verify_remote):
+    @patch("py_load_opentargets.orchestrator.verify_remote_dataset")
+    @patch("py_load_opentargets.orchestrator.get_remote_schema")
+    @patch("py_load_opentargets.orchestrator.get_remote_dataset_urls")
+    @patch("py_load_opentargets.orchestrator.get_checksum_manifest")
+    @patch("py_load_opentargets.orchestrator.os.getenv")
+    def test_run_error_handling_stream_strategy(
+        self,
+        mock_getenv,
+        mock_get_checksums,
+        mock_get_urls,
+        mock_get_schema,
+        mock_verify_remote,
+    ):
         """Test that an error during bulk load is handled correctly with the stream strategy."""
         # Arrange
-        mock_getenv.side_effect = lambda key: "fake_db_conn_str" if key == "DB_CONN_STR" else None
-        mock_get_checksums.return_value = {"output/etl/parquet/diseases/file1.parquet": "dummy_hash"}
+        mock_getenv.side_effect = (
+            lambda key: "fake_db_conn_str" if key == "DB_CONN_STR" else None
+        )
+        mock_get_checksums.return_value = {
+            "output/etl/parquet/diseases/file1.parquet": "dummy_hash"
+        }
         mock_get_urls.return_value = ["http://fake/file1.parquet"]
         mock_get_schema.return_value = pa.schema([pa.field("id", pa.int64())])
         self.mock_loader.get_last_successful_version.return_value = None
@@ -98,11 +121,11 @@ class TestETLOrchestrator(unittest.TestCase):
 
         orchestrator = ETLOrchestrator(
             config=self.mock_config,
-            datasets_to_process=['diseases'],
+            datasets_to_process=["diseases"],
             version=self.version,
             staging_schema=self.staging_schema,
             final_schema=self.final_schema,
-            continue_on_error=True
+            continue_on_error=True,
         )
         orchestrator.loader_factory = self.mock_loader_factory
 
@@ -115,27 +138,34 @@ class TestETLOrchestrator(unittest.TestCase):
         mock_get_urls.assert_called_once()
         self.mock_loader.execute_merge_strategy.assert_not_called()
         self.mock_loader.update_metadata.assert_called_once_with(
-            version=self.version, dataset='diseases', success=False, row_count=0, error_message="DB connection lost",
-            start_time=ANY, end_time=ANY
+            version=self.version,
+            dataset="diseases",
+            success=False,
+            row_count=0,
+            error_message="DB connection lost",
+            start_time=ANY,
+            end_time=ANY,
         )
         self.mock_loader.cleanup.assert_called_once()
 
-    @patch('py_load_opentargets.orchestrator.get_checksum_manifest')
-    @patch('py_load_opentargets.orchestrator.os.getenv')
+    @patch("py_load_opentargets.orchestrator.get_checksum_manifest")
+    @patch("py_load_opentargets.orchestrator.os.getenv")
     def test_run_skips_already_loaded_version(self, mock_getenv, mock_get_checksums):
         """Test that the orchestrator skips a dataset if the same version is already loaded."""
         # Arrange
-        mock_getenv.side_effect = lambda key: "fake_db_conn_str" if key == "DB_CONN_STR" else None
+        mock_getenv.side_effect = (
+            lambda key: "fake_db_conn_str" if key == "DB_CONN_STR" else None
+        )
         mock_get_checksums.return_value = {}
         self.mock_loader.get_last_successful_version.return_value = self.version
 
         orchestrator = ETLOrchestrator(
             config=self.mock_config,
-            datasets_to_process=['targets'],
+            datasets_to_process=["targets"],
             version=self.version,
             staging_schema=self.staging_schema,
             final_schema=self.final_schema,
-            skip_confirmation=False
+            skip_confirmation=False,
         )
         orchestrator.loader_factory = self.mock_loader_factory
 
@@ -155,22 +185,32 @@ class TestETLOrchestrator(unittest.TestCase):
         self.mock_loader.get_last_successful_version.return_value = self.version
         orchestrator = ETLOrchestrator(
             config=self.mock_config,
-            datasets_to_process=['targets'],
+            datasets_to_process=["targets"],
             version=self.version,
             staging_schema=self.staging_schema,
             final_schema=self.final_schema,
-            skip_confirmation=False
+            skip_confirmation=False,
         )
         orchestrator.loader_factory = self.mock_loader_factory
 
-        with patch('py_load_opentargets.orchestrator.get_remote_dataset_urls', return_value=['fake_url']):
+        with patch(
+            "py_load_opentargets.orchestrator.get_remote_dataset_urls",
+            return_value=["fake_url"],
+        ):
             result = orchestrator._process_dataset(
-                'targets', 'fake_conn_str', 1, {}, 'stream', self.mock_config['source']['gcs_ftp']
+                "targets",
+                "fake_conn_str",
+                1,
+                {},
+                "stream",
+                self.mock_config["source"]["gcs_ftp"],
             )
         self.assertIn("Skipped", result)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
+
 
 class TestGetDbLoaderFactory(unittest.TestCase):
     def test_get_db_loader_factory_success(self):
@@ -179,14 +219,16 @@ class TestGetDbLoaderFactory(unittest.TestCase):
         mock_ep.name = "postgres"
         mock_ep.load.return_value = "dummy_loader"
 
-        with patch('py_load_opentargets.orchestrator.entry_points', return_value=[mock_ep]) as mock_eps:
+        with patch(
+            "py_load_opentargets.orchestrator.entry_points", return_value=[mock_ep]
+        ) as mock_eps:
             factory = get_db_loader_factory("postgres")
             self.assertEqual(factory, "dummy_loader")
-            mock_eps.assert_called_with(group='py_load_opentargets.backends')
+            mock_eps.assert_called_with(group="py_load_opentargets.backends")
 
     def test_get_db_loader_factory_not_found(self):
         """Tests that an error is raised when the backend is not found."""
-        with patch('py_load_opentargets.orchestrator.entry_points', return_value=[]):
+        with patch("py_load_opentargets.orchestrator.entry_points", return_value=[]):
             with self.assertRaises(ValueError):
                 get_db_loader_factory("non_existent_backend")
 
@@ -196,9 +238,12 @@ class TestGetDbLoaderFactory(unittest.TestCase):
         mock_ep.name = "postgres"
         mock_ep.load.return_value = "dummy_loader"
 
-        with patch('py_load_opentargets.orchestrator.entry_points') as mock_eps:
+        with patch("py_load_opentargets.orchestrator.entry_points") as mock_eps:
             # Simulate Python < 3.10 behavior
-            mock_eps.side_effect = [TypeError, {'py_load_opentargets.backends': [mock_ep]}]
+            mock_eps.side_effect = [
+                TypeError,
+                {"py_load_opentargets.backends": [mock_ep]},
+            ]
             factory = get_db_loader_factory("postgres")
             self.assertEqual(factory, "dummy_loader")
             self.assertEqual(mock_eps.call_count, 2)

@@ -2,15 +2,18 @@ import pytest
 from testcontainers.postgres import PostgresContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 import psycopg
-from psycopg import sql
 
 from py_load_opentargets.backends.postgres import PostgresLoader
+
 
 @pytest.fixture(scope="module")
 def postgres_container():
     """Starts a PostgreSQL container for the test module."""
-    with PostgresContainer("postgres:16").waiting_for(LogMessageWaitStrategy("database system is ready to accept connections")) as container:
+    with PostgresContainer("postgres:16").waiting_for(
+        LogMessageWaitStrategy("database system is ready to accept connections")
+    ) as container:
         yield container
+
 
 @pytest.fixture
 def db_loader(postgres_container: PostgresContainer):
@@ -41,9 +44,12 @@ def db_loader(postgres_container: PostgresContainer):
     yield loader
 
     # Teardown
-    loader.cursor.execute("DROP TABLE IF EXISTS public.child; DROP TABLE IF EXISTS public.parent;")
+    loader.cursor.execute(
+        "DROP TABLE IF EXISTS public.child; DROP TABLE IF EXISTS public.parent;"
+    )
     loader.conn.commit()
     loader.cleanup()
+
 
 def test_get_foreign_keys(db_loader: PostgresLoader):
     """Tests that foreign keys are correctly identified."""
@@ -53,6 +59,7 @@ def test_get_foreign_keys(db_loader: PostgresLoader):
     assert fk["name"] == "fk_child_parent"
     # DDL from pg_get_constraintdef might not be schema-qualified, so test is less strict.
     assert "FOREIGN KEY (parent_id) REFERENCES parent(id)" in fk["ddl"]
+
 
 def test_drop_and_recreate_foreign_keys(db_loader: PostgresLoader):
     """
@@ -69,10 +76,14 @@ def test_drop_and_recreate_foreign_keys(db_loader: PostgresLoader):
 
     # 3. Verify FK is dropped by inserting an orphan row (should succeed)
     try:
-        db_loader.cursor.execute("INSERT INTO public.child (id, parent_id) VALUES (30, 99);")
+        db_loader.cursor.execute(
+            "INSERT INTO public.child (id, parent_id) VALUES (30, 99);"
+        )
         db_loader.conn.commit()
     except psycopg.errors.ForeignKeyViolation:
-        pytest.fail("ForeignKeyViolation was raised, but constraint should have been dropped.")
+        pytest.fail(
+            "ForeignKeyViolation was raised, but constraint should have been dropped."
+        )
 
     # 4. Clean up the orphan row before recreating the constraint
     db_loader.cursor.execute("DELETE FROM public.child WHERE id = 30;")
@@ -83,12 +94,15 @@ def test_drop_and_recreate_foreign_keys(db_loader: PostgresLoader):
 
     # 6. Verify FK is recreated by inserting another orphan row (should fail)
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
-        db_loader.cursor.execute("INSERT INTO public.child (id, parent_id) VALUES (40, 101);")
+        db_loader.cursor.execute(
+            "INSERT INTO public.child (id, parent_id) VALUES (40, 101);"
+        )
         db_loader.conn.commit()
 
     # The transaction is now in a failed state, so we must roll it back
     # before the fixture can clean up the tables.
     db_loader.conn.rollback()
+
 
 def test_get_foreign_keys_no_fks(db_loader: PostgresLoader):
     """Tests that an empty list is returned for a table with no FKs."""

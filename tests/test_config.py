@@ -1,13 +1,14 @@
 import pytest
-import os
-from py_load_opentargets.config import load_config, get_config, _config
+from py_load_opentargets.config import load_config, get_config
+
 
 def test_load_config_file_not_found():
     """
     Test that FileNotFoundError is raised when the config file does not exist.
     """
     with pytest.raises(FileNotFoundError):
-        load_config('non_existent_file.toml')
+        load_config("non_existent_file.toml")
+
 
 def test_load_config_malformed_toml(tmp_path):
     """
@@ -15,8 +16,11 @@ def test_load_config_malformed_toml(tmp_path):
     """
     malformed_toml = tmp_path / "malformed.toml"
     malformed_toml.write_text("this is not valid toml")
-    with pytest.raises(Exception): # Using generic exception as tomllib is not directly imported
+    with pytest.raises(
+        Exception
+    ):  # Using generic exception as tomllib is not directly imported
         load_config(str(malformed_toml))
+
 
 def test_load_config_missing_provider_warning(caplog, tmp_path):
     """
@@ -29,16 +33,19 @@ def test_load_config_missing_provider_warning(caplog, tmp_path):
 provider = "missing_provider"
 """)
     load_config(str(config_with_missing_provider))
-    assert "Source provider 'missing_provider' is specified but no corresponding" in caplog.text
+    assert (
+        "Source provider 'missing_provider' is specified but no corresponding"
+        in caplog.text
+    )
 
-def test_get_config_loads_defaults_when_not_loaded():
+
+def test_get_config_loads_defaults_when_not_loaded(monkeypatch):
     """
     Test that get_config() loads the default configuration if it hasn't
     been loaded yet.
     """
-    global _config
-    _config = None  # Ensure config is not loaded
+    monkeypatch.setattr("py_load_opentargets.config._config", None)
     config = get_config()
     assert config is not None
-    assert 'database' in config
-    assert 'backend' in config['database']
+    assert "database" in config
+    assert "backend" in config["database"]

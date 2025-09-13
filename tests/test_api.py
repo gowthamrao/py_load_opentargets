@@ -8,18 +8,15 @@ MOCK_CONFIG = {
     "source": {
         "version_discovery_uri": "mock://versions",
         "provider": "mock_provider",
-        "mock_provider": {
-            "data_uri_template": "mock://{version}/{dataset_name}"
-        }
+        "mock_provider": {"data_uri_template": "mock://{version}/{dataset_name}"},
     },
-    "database": {
-        "backend": "postgres"
-    },
+    "database": {"backend": "postgres"},
     "datasets": {
         "dataset1": {"primary_key": ["id"]},
         "dataset2": {"primary_key": ["id"]},
-    }
+    },
 }
+
 
 @patch("py_load_opentargets.api.setup_logging")
 @patch("py_load_opentargets.api.ETLOrchestrator")
@@ -35,7 +32,9 @@ def test_load_opentargets_api_direct_call(
     # Arrange
     # Mock the validator to simulate a successful validation
     mock_validator_instance = MagicMock()
-    mock_validator_instance.run_all_checks.return_value = {"check1": {"success": True, "message": "OK"}}
+    mock_validator_instance.run_all_checks.return_value = {
+        "check1": {"success": True, "message": "OK"}
+    }
     mock_validator.return_value = mock_validator_instance
 
     mock_orchestrator_instance = MagicMock()
@@ -49,7 +48,7 @@ def test_load_opentargets_api_direct_call(
         staging_schema="test_staging",
         final_schema="test_final",
         load_type="full-refresh",
-        continue_on_error=False
+        continue_on_error=False,
     )
 
     # Assert
@@ -77,12 +76,18 @@ def test_load_opentargets_api_direct_call(
 
 
 @patch("py_load_opentargets.api.setup_logging")
-@patch("py_load_opentargets.api.list_available_versions", return_value=["23.06", "23.04"])
+@patch(
+    "py_load_opentargets.api.list_available_versions", return_value=["23.06", "23.04"]
+)
 @patch("py_load_opentargets.api.ETLOrchestrator")
 @patch("py_load_opentargets.api.ValidationService")
 @patch("py_load_opentargets.api.load_config", return_value=MOCK_CONFIG)
 def test_load_opentargets_api_version_discovery(
-    mock_load_config, mock_validator, mock_orchestrator, mock_list_versions, mock_setup_logging
+    mock_load_config,
+    mock_validator,
+    mock_orchestrator,
+    mock_list_versions,
+    mock_setup_logging,
 ):
     """
     Tests that the API function performs version discovery when no version is provided
@@ -90,15 +95,19 @@ def test_load_opentargets_api_version_discovery(
     """
     # Arrange
     mock_validator_instance = MagicMock()
-    mock_validator_instance.run_all_checks.return_value = {"check1": {"success": True, "message": "OK"}}
+    mock_validator_instance.run_all_checks.return_value = {
+        "check1": {"success": True, "message": "OK"}
+    }
     mock_validator.return_value = mock_validator_instance
 
     # Act
-    api.load_opentargets() # Call with no arguments to trigger defaults
+    api.load_opentargets()  # Call with no arguments to trigger defaults
 
     # Assert
     # Verify that version discovery was triggered
-    mock_list_versions.assert_called_once_with(MOCK_CONFIG["source"]["version_discovery_uri"])
+    mock_list_versions.assert_called_once_with(
+        MOCK_CONFIG["source"]["version_discovery_uri"]
+    )
 
     # Verify that the latest version ("23.06") was passed to the orchestrator
     mock_orchestrator.assert_called_once()
@@ -121,7 +130,9 @@ def test_load_opentargets_api_validation_failure(
     # Arrange
     # Mock the validator to simulate a failed validation
     mock_validator_instance = MagicMock()
-    mock_validator_instance.run_all_checks.return_value = {"check1": {"success": False, "message": "Failed"}}
+    mock_validator_instance.run_all_checks.return_value = {
+        "check1": {"success": False, "message": "Failed"}
+    }
     mock_validator.return_value = mock_validator_instance
 
     # Act & Assert

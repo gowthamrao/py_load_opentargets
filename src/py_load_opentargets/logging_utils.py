@@ -2,6 +2,7 @@ import logging
 import sys
 from pythonjsonlogger.json import JsonFormatter
 
+
 def setup_logging(level=logging.INFO, json_format=False):
     """
     Configures the root logger for the application.
@@ -22,15 +23,13 @@ def setup_logging(level=logging.INFO, json_format=False):
 
     if json_format:
         # Use a JSON formatter
-        formatter = JsonFormatter(
-            '%(asctime)s %(name)s %(levelname)s %(message)s'
-        )
+        formatter = JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
         handler.setFormatter(formatter)
         log_message = "Structured JSON logging initialized."
     else:
         # Use a standard text formatter
         formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
         handler.setFormatter(formatter)
         log_message = "Standard text logging initialized."
@@ -40,7 +39,7 @@ def setup_logging(level=logging.INFO, json_format=False):
 
     # Redirect warnings from the 'warnings' module to the logging system
     logging.captureWarnings(True)
-    warnings_logger = logging.getLogger('py.warnings')
+    warnings_logger = logging.getLogger("py.warnings")
     warnings_logger.addHandler(handler)
     warnings_logger.setLevel(logging.WARNING)
 

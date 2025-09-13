@@ -56,7 +56,9 @@ def load_opentargets(
     # Load config first to check for logging settings within the file.
     try:
         config = load_config(config_path)
-        use_json_logging = json_logs or config.get("logging", {}).get("json_format", False)
+        use_json_logging = json_logs or config.get("logging", {}).get(
+            "json_format", False
+        )
         setup_logging(json_format=use_json_logging)
 
         logger.info("--- Starting Open Targets ETL Process via Programmatic API ---")
@@ -66,7 +68,9 @@ def load_opentargets(
 
         logger.info(f"Selected datasets: {', '.join(datasets_to_process)}")
         logger.info(f"Load type: {load_type}")
-        logger.info(f"Staging schema: '{staging_schema}', Final schema: '{final_schema}'")
+        logger.info(
+            f"Staging schema: '{staging_schema}', Final schema: '{final_schema}'"
+        )
 
         # --- 2. Validation ---
         logger.info("Validating configuration and connections...")
@@ -80,9 +84,13 @@ def load_opentargets(
                 logger.error(f"Validation FAILED for '{check_name}': {message}")
 
         if not all_successful:
-            logger.critical("Prerequisite validation failed. Please check your configuration.")
+            logger.critical(
+                "Prerequisite validation failed. Please check your configuration."
+            )
             # Raising an exception is more idiomatic for an API than aborting.
-            raise RuntimeError("Prerequisite validation failed. Please check logs for details.")
+            raise RuntimeError(
+                "Prerequisite validation failed. Please check logs for details."
+            )
         else:
             logger.info("Validation successful.")
 
@@ -90,9 +98,13 @@ def load_opentargets(
         if not version:
             logger.info("No version specified, discovering the latest...")
             try:
-                versions = list_available_versions(source_config["version_discovery_uri"])
+                versions = list_available_versions(
+                    source_config["version_discovery_uri"]
+                )
                 if not versions:
-                    raise RuntimeError("Could not find any available Open Targets versions.")
+                    raise RuntimeError(
+                        "Could not find any available Open Targets versions."
+                    )
                 version = versions[0]
                 logger.info(f"Found latest version: {version}")
             except Exception as e:
@@ -114,7 +126,9 @@ def load_opentargets(
         orchestrator.run()
 
     except Exception as e:
-        logger.critical(f"A fatal error occurred during the ETL process: {e}", exc_info=True)
+        logger.critical(
+            f"A fatal error occurred during the ETL process: {e}", exc_info=True
+        )
         # Re-raise the exception so the caller can handle it.
         raise
     finally:

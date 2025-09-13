@@ -1,12 +1,11 @@
 import psycopg
 from psycopg import sql
-import pyarrow.parquet as pq
 import pyarrow as pa
 import polars as pl
 import logging
 import io
 import json
-from typing import Dict, Any, Iterator, List, Optional
+from typing import Dict, Any, List, Optional
 
 from ..loader import DatabaseLoader
 
@@ -50,15 +49,27 @@ class _ParquetStreamer:
 
             # Case 1: Flatten a struct
             if action == "flatten" and pa.types.is_struct(field.type):
-                logger.info(f"Rule: Flattening all fields from struct column '{col_name}'.")
+                logger.info(
+                    f"Rule: Flattening all fields from struct column '{col_name}'."
+                )
                 for sub_field in field.type:
-                    new_col_name = f"{final_name}{self._flatten_separator}{sub_field.name}"
+                    new_col_name = (
+                        f"{final_name}{self._flatten_separator}{sub_field.name}"
+                    )
                     select_exprs.append(
-                        pl.col(col_name).struct.field(sub_field.name).alias(new_col_name)
+                        pl.col(col_name)
+                        .struct.field(sub_field.name)
+                        .alias(new_col_name)
                     )
             # Case 2: Serialize to JSON
-            elif action == "json" or (pa.types.is_struct(field.type) and action != "flatten") or pa.types.is_list(field.type):
-                logger.info(f"Rule: Serializing column '{col_name}' to JSON as '{final_name}'.")
+            elif (
+                action == "json"
+                or (pa.types.is_struct(field.type) and action != "flatten")
+                or pa.types.is_list(field.type)
+            ):
+                logger.info(
+                    f"Rule: Serializing column '{col_name}' to JSON as '{final_name}'."
+                )
                 # Use the appropriate json_encode method based on the type
                 if pa.types.is_struct(field.type):
                     expr = pl.col(col_name).struct.json_encode()
@@ -94,7 +105,13 @@ class _ParquetStreamer:
             # Reset buffer and write new data into it
             self._buffer.seek(0)
             self._buffer.truncate(0)
-            lf.sink_csv(self._buffer, separator="\t", null_value="\\N", include_header=False, quote_style="never")
+            lf.sink_csv(
+                self._buffer,
+                separator="\t",
+                null_value="\\N",
+                include_header=False,
+                quote_style="never",
+            )
             self._buffer.seek(0)
 
         except StopIteration:
@@ -127,7 +144,9 @@ class PostgresLoader(DatabaseLoader):
         self.cursor = None
         self.dataset_config = {}
 
-    def connect(self, conn_str: str, dataset_config: Optional[Dict[str, Any]] = None) -> None:
+    def connect(
+        self, conn_str: str, dataset_config: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Establishes a connection to the PostgreSQL database."""
         logger.info("Connecting to PostgreSQL database...")
         self.dataset_config = dataset_config or {}
@@ -164,7 +183,9 @@ class PostgresLoader(DatabaseLoader):
         elif pa.types.is_struct(arrow_type) or pa.types.is_list(arrow_type):
             return "JSONB"
         else:
-            logger.warning(f"Unsupported PyArrow type {arrow_type}. Defaulting to TEXT.")
+            logger.warning(
+                f"Unsupported PyArrow type {arrow_type}. Defaulting to TEXT."
+            )
             return "TEXT"
 
     def _get_transformed_schema(self, original_schema: pa.Schema) -> pa.Schema:
@@ -188,7 +209,11 @@ class PostgresLoader(DatabaseLoader):
                     new_name = f"{final_name}{flatten_separator}{sub_field.name}"
                     new_fields.append(pa.field(new_name, sub_field.type))
             # Case 2: Serialize to JSON
-            elif action == "json" or (pa.types.is_struct(field.type) and action != "flatten") or pa.types.is_list(field.type):
+            elif (
+                action == "json"
+                or (pa.types.is_struct(field.type) and action != "flatten")
+                or pa.types.is_list(field.type)
+            ):
                 # Keep the original nested type, but with the new name.
                 # _pyarrow_to_postgres_type will map this to JSONB.
                 new_fields.append(field.with_name(final_name))
@@ -198,13 +223,17 @@ class PostgresLoader(DatabaseLoader):
 
         return pa.schema(new_fields)
 
-    def _generate_create_table_sql(self, table_name: str, schema: pa.Schema, schema_overrides: dict) -> str:
+    def _generate_create_table_sql(
+        self, table_name: str, schema: pa.Schema, schema_overrides: dict
+    ) -> str:
         """Generates a CREATE TABLE SQL statement from a transformed PyArrow schema."""
         columns = []
         for field in schema:
             col_name = field.name
             # Check for a user-defined type override first
-            override = schema_overrides.get(field.name, {}) # Note: This lookup is on the final name
+            override = schema_overrides.get(
+                field.name, {}
+            )  # Note: This lookup is on the final name
             col_type = override.get("type", self._pyarrow_to_postgres_type(field.type))
             columns.append(f'"{col_name}" {col_type}')
 
@@ -220,17 +249,23 @@ class PostgresLoader(DatabaseLoader):
 
         schema_overrides = self.dataset_config.get("schema_overrides", {})
         transformed_schema = self._get_transformed_schema(schema)
-        create_sql = self._generate_create_table_sql(table_name, transformed_schema, schema_overrides)
+        create_sql = self._generate_create_table_sql(
+            table_name, transformed_schema, schema_overrides
+        )
 
         logger.info(f"Dropping table '{table_name}' if it exists.")
-        self.cursor.execute(f"DROP TABLE IF EXISTS {table_name};")
+        self.cursor.execute(
+            sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(table_name))
+        )
 
         logger.info(f"Creating table '{table_name}' with transformed schema.")
         logger.debug(f"CREATE TABLE SQL:\n{create_sql}")
         self.cursor.execute(create_sql)
         self.conn.commit()
 
-    def bulk_load_native(self, table_name: str, parquet_uris: List[str], schema: pa.Schema) -> int:
+    def bulk_load_native(
+        self, table_name: str, parquet_uris: List[str], schema: pa.Schema
+    ) -> int:
         """
         Loads data from a list of Parquet files into a PostgreSQL table using a
         single, streamed, native COPY command, handling data transformations on the fly.
@@ -238,7 +273,7 @@ class PostgresLoader(DatabaseLoader):
         logger.info(f"Starting single-stream bulk load for '{table_name}'.")
 
         if not parquet_uris:
-            logger.warning(f"No .parquet files provided. Skipping bulk load.")
+            logger.warning("No .parquet files provided. Skipping bulk load.")
             return 0
 
         schema_overrides = self.dataset_config.get("schema_overrides", {})
@@ -267,7 +302,9 @@ class PostgresLoader(DatabaseLoader):
         total_rows = self.cursor.rowcount
         self.conn.commit()
 
-        logger.info(f"Total rows loaded into '{table_name}' in a single transaction: {total_rows}")
+        logger.info(
+            f"Total rows loaded into '{table_name}' in a single transaction: {total_rows}"
+        )
         return total_rows
 
     def prepare_staging_schema(self, schema_name: str) -> None:
@@ -281,7 +318,7 @@ class PostgresLoader(DatabaseLoader):
         logger.info(f"Checking for metadata table '{table_name}'...")
         self.cursor.execute(
             "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s);",
-            (table_name,)
+            (table_name,),
         )
         if self.cursor.fetchone()[0]:
             logger.info(f"Metadata table '{table_name}' already exists.")
@@ -321,7 +358,7 @@ class PostgresLoader(DatabaseLoader):
             ORDER BY load_timestamp DESC
             LIMIT 1;
             """,
-            (dataset,)
+            (dataset,),
         )
         result = self.cursor.fetchone()
         return result[0] if result else None
@@ -329,14 +366,16 @@ class PostgresLoader(DatabaseLoader):
     def table_exists(self, table_name: str) -> bool:
         """Checks if a table exists in the database."""
         try:
-            schema, table = table_name.split('.')
+            schema, table = table_name.split(".")
         except ValueError:
-            logger.error(f"Invalid table name format '{table_name}'. Expected 'schema.table'.")
+            logger.error(
+                f"Invalid table name format '{table_name}'. Expected 'schema.table'."
+            )
             raise
 
         self.cursor.execute(
             "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = %s AND table_name = %s);",
-            (schema, table)
+            (schema, table),
         )
         return self.cursor.fetchone()[0]
 
@@ -347,7 +386,7 @@ class PostgresLoader(DatabaseLoader):
         :param table_name: The fully qualified name of the table.
         :return: A list of dicts, where each dict has 'name' and 'ddl' for an index.
         """
-        schema, table = table_name.split('.')
+        schema, table = table_name.split(".")
         logger.info(f"Retrieving index definitions for table '{table_name}'.")
         fully_qualified_table = f'"{schema}"."{table}"'
         sql_query = """
@@ -363,7 +402,9 @@ class PostgresLoader(DatabaseLoader):
         self.cursor.execute(sql_query, (schema, table, fully_qualified_table))
         indexes = [{"name": row[0], "ddl": row[1]} for row in self.cursor.fetchall()]
         if indexes:
-            logger.info(f"Found {len(indexes)} non-PK indexes: {[i['name'] for i in indexes]}")
+            logger.info(
+                f"Found {len(indexes)} non-PK indexes: {[i['name'] for i in indexes]}"
+            )
         else:
             logger.info("No non-PK indexes found.")
         return indexes
@@ -378,9 +419,11 @@ class PostgresLoader(DatabaseLoader):
             return
         logger.info(f"Dropping {len(indexes)} indexes to improve merge performance...")
         for index in indexes:
-            index_name = index['name']
+            index_name = index["name"]
             logger.info(f"Dropping index: {index_name}")
-            self.cursor.execute(sql.SQL("DROP INDEX IF EXISTS {};").format(sql.Identifier(index_name)))
+            self.cursor.execute(
+                sql.SQL("DROP INDEX IF EXISTS {};").format(sql.Identifier(index_name))
+            )
         self.conn.commit()
 
     def recreate_indexes(self, indexes: List[Dict[str, str]]) -> None:
@@ -394,7 +437,7 @@ class PostgresLoader(DatabaseLoader):
         logger.info(f"Recreating {len(indexes)} indexes...")
         for index in indexes:
             logger.info(f"Recreating index using DDL: {index['ddl']}")
-            self.cursor.execute(index['ddl'])
+            self.cursor.execute(index["ddl"])
         self.conn.commit()
         logger.info("All indexes recreated successfully.")
 
@@ -402,7 +445,7 @@ class PostgresLoader(DatabaseLoader):
         """
         Retrieves definitions for all foreign key constraints on a table.
         """
-        schema, table = table_name.split('.')
+        schema, table = table_name.split(".")
         logger.info(f"Retrieving foreign key definitions for table '{table_name}'.")
         sql_query = """
             SELECT
@@ -416,54 +459,67 @@ class PostgresLoader(DatabaseLoader):
                 nsp.nspname = %s AND rel.relname = %s AND con.contype = 'f';
         """
         self.cursor.execute(sql_query, (schema, table))
-        foreign_keys = [{"name": row[0], "ddl": row[1]} for row in self.cursor.fetchall()]
+        foreign_keys = [
+            {"name": row[0], "ddl": row[1]} for row in self.cursor.fetchall()
+        ]
         if foreign_keys:
-            logger.info(f"Found {len(foreign_keys)} foreign keys: {[fk['name'] for fk in foreign_keys]}")
+            logger.info(
+                f"Found {len(foreign_keys)} foreign keys: {[fk['name'] for fk in foreign_keys]}"
+            )
         else:
             logger.info("No foreign keys found.")
         return foreign_keys
 
-    def drop_foreign_keys(self, table_name: str, foreign_keys: List[Dict[str, str]]) -> None:
+    def drop_foreign_keys(
+        self, table_name: str, foreign_keys: List[Dict[str, str]]
+    ) -> None:
         """
         Drops a list of foreign key constraints from a table.
         """
         if not foreign_keys:
             return
-        logger.info(f"Dropping {len(foreign_keys)} foreign keys from {table_name} to improve merge performance...")
-        table_ident = sql.Identifier(*table_name.split('.'))
+        logger.info(
+            f"Dropping {len(foreign_keys)} foreign keys from {table_name} to improve merge performance..."
+        )
+        table_ident = sql.Identifier(*table_name.split("."))
         for fk in foreign_keys:
-            fk_name = fk['name']
+            fk_name = fk["name"]
             logger.info(f"Dropping foreign key: {fk_name}")
-            self.cursor.execute(sql.SQL("ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {fk_name};").format(
-                table=table_ident,
-                fk_name=sql.Identifier(fk_name)
-            ))
+            self.cursor.execute(
+                sql.SQL(
+                    "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {fk_name};"
+                ).format(table=table_ident, fk_name=sql.Identifier(fk_name))
+            )
         self.conn.commit()
 
-    def recreate_foreign_keys(self, table_name: str, foreign_keys: List[Dict[str, str]]) -> None:
+    def recreate_foreign_keys(
+        self, table_name: str, foreign_keys: List[Dict[str, str]]
+    ) -> None:
         """
         Recreates a list of foreign key constraints on a table from their DDL definitions.
         """
         if not foreign_keys:
             return
         logger.info(f"Recreating {len(foreign_keys)} foreign keys on {table_name}...")
-        table_ident = sql.Identifier(*table_name.split('.'))
+        table_ident = sql.Identifier(*table_name.split("."))
         for fk in foreign_keys:
             logger.info(f"Recreating foreign key '{fk['name']}' using DDL: {fk['ddl']}")
-            self.cursor.execute(sql.SQL("ALTER TABLE {table} ADD CONSTRAINT {fk_name} {ddl};").format(
-                table=table_ident,
-                fk_name=sql.Identifier(fk['name']),
-                ddl=sql.SQL(fk['ddl'])
-            ))
+            self.cursor.execute(
+                sql.SQL("ALTER TABLE {table} ADD CONSTRAINT {fk_name} {ddl};").format(
+                    table=table_ident,
+                    fk_name=sql.Identifier(fk["name"]),
+                    ddl=sql.SQL(fk["ddl"]),
+                )
+            )
         self.conn.commit()
         logger.info("All foreign keys recreated successfully.")
 
     def _get_table_columns(self, table_name: str) -> list[str]:
         """Retrieves a list of column names for a given table."""
-        schema, table = table_name.split('.')
+        schema, table = table_name.split(".")
         self.cursor.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position;",
-            (schema, table)
+            (schema, table),
         )
         return [row[0] for row in self.cursor.fetchall()]
 
@@ -471,33 +527,41 @@ class PostgresLoader(DatabaseLoader):
         """
         Retrieves a dictionary of {column_name: data_type} for a given table.
         """
-        schema, table = table_name.split('.')
+        schema, table = table_name.split(".")
         self.cursor.execute(
             """
             SELECT column_name, data_type
             FROM information_schema.columns
             WHERE table_schema = %s AND table_name = %s;
             """,
-            (schema, table)
+            (schema, table),
         )
         return {row[0]: row[1] for row in self.cursor.fetchall()}
 
     def align_final_table_schema(self, staging_table: str, final_table: str) -> None:
-        logger.info(f"Aligning schema of final table '{final_table}' with staging table '{staging_table}'.")
+        logger.info(
+            f"Aligning schema of final table '{final_table}' with staging table '{staging_table}'."
+        )
         staging_schema = self._get_table_schema_from_db(staging_table)
         final_schema = self._get_table_schema_from_db(final_table)
         staging_cols = set(staging_schema.keys())
         final_cols = set(final_schema.keys())
         new_columns = staging_cols - final_cols
         if new_columns:
-            logger.info(f"Found {len(new_columns)} new columns to add: {', '.join(sorted(new_columns))}")
+            logger.info(
+                f"Found {len(new_columns)} new columns to add: {', '.join(sorted(new_columns))}"
+            )
             for col_name in sorted(list(new_columns)):
                 col_type = staging_schema[col_name]
-                logger.info(f"Adding column '{col_name}' with type '{col_type}' to '{final_table}'.")
-                alter_sql = sql.SQL("ALTER TABLE {final_table} ADD COLUMN {col_name} {col_type};").format(
-                    final_table=sql.Identifier(*final_table.split('.')),
+                logger.info(
+                    f"Adding column '{col_name}' with type '{col_type}' to '{final_table}'."
+                )
+                alter_sql = sql.SQL(
+                    "ALTER TABLE {final_table} ADD COLUMN {col_name} {col_type};"
+                ).format(
+                    final_table=sql.Identifier(*final_table.split(".")),
                     col_name=sql.Identifier(col_name),
-                    col_type=sql.SQL(col_type)
+                    col_type=sql.SQL(col_type),
                 )
                 self.cursor.execute(alter_sql)
             self.conn.commit()
@@ -507,8 +571,12 @@ class PostgresLoader(DatabaseLoader):
         common_columns = staging_cols.intersection(final_cols)
         mismatched_columns = []
         for col_name in common_columns:
-            staging_type = staging_schema[col_name].lower().replace("character varying", "varchar")
-            final_type = final_schema[col_name].lower().replace("character varying", "varchar")
+            staging_type = (
+                staging_schema[col_name].lower().replace("character varying", "varchar")
+            )
+            final_type = (
+                final_schema[col_name].lower().replace("character varying", "varchar")
+            )
             if staging_type != final_type:
                 mismatched_columns.append(col_name)
                 logger.warning(
@@ -527,7 +595,9 @@ class PostgresLoader(DatabaseLoader):
             )
         logger.info(f"Schema alignment check for '{final_table}' complete.")
 
-    def execute_merge_strategy(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:
+    def execute_merge_strategy(
+        self, staging_table: str, final_table: str, primary_keys: list[str]
+    ) -> None:
         """
         Merges data from the staging table to the final table using a
         DELETE-then-UPSERT strategy to handle additions, updates, and deletions.
@@ -536,27 +606,37 @@ class PostgresLoader(DatabaseLoader):
         """
         logger.info(f"Starting merge from '{staging_table}' to '{final_table}'.")
 
-        final_table_ident = sql.Identifier(*final_table.split('.'))
-        staging_table_ident = sql.Identifier(*staging_table.split('.'))
+        final_table_ident = sql.Identifier(*final_table.split("."))
+        staging_table_ident = sql.Identifier(*staging_table.split("."))
         pk_idents = [sql.Identifier(k) for k in primary_keys]
 
         # 1. Handle initial load: if final table doesn't exist, create it and copy data
         if not self.table_exists(final_table):
-            logger.info(f"Final table '{final_table}' does not exist. Creating and copying data...")
-            self.cursor.execute(sql.SQL("CREATE TABLE {final} AS TABLE {staging};").format(
-                final=final_table_ident, staging=staging_table_ident
-            ))
+            logger.info(
+                f"Final table '{final_table}' does not exist. Creating and copying data..."
+            )
+            self.cursor.execute(
+                sql.SQL("CREATE TABLE {final} AS TABLE {staging};").format(
+                    final=final_table_ident, staging=staging_table_ident
+                )
+            )
             pk_constraint_name = sql.Identifier(f"pk_{final_table.replace('.', '_')}")
-            self.cursor.execute(sql.SQL("ALTER TABLE {final} ADD CONSTRAINT {pk_name} PRIMARY KEY ({pk_cols});").format(
-                final=final_table_ident,
-                pk_name=pk_constraint_name,
-                pk_cols=sql.SQL(', ').join(pk_idents)
-            ))
+            self.cursor.execute(
+                sql.SQL(
+                    "ALTER TABLE {final} ADD CONSTRAINT {pk_name} PRIMARY KEY ({pk_cols});"
+                ).format(
+                    final=final_table_ident,
+                    pk_name=pk_constraint_name,
+                    pk_cols=sql.SQL(", ").join(pk_idents),
+                )
+            )
             logger.info(f"Successfully created and populated '{final_table}'.")
             self.conn.commit()
             return
 
-        logger.info(f"Final table '{final_table}' exists. Performing DELETE-then-UPSERT.")
+        logger.info(
+            f"Final table '{final_table}' exists. Performing DELETE-then-UPSERT."
+        )
 
         # --- Stage 1: Delete records that are in the final table but not in the new staging data ---
         # This uses a `NOT EXISTS` subquery which is highly efficient in PostgreSQL.
@@ -564,7 +644,7 @@ class PostgresLoader(DatabaseLoader):
         # in the staging table.
         logger.info("Identifying and deleting stale records from final table...")
 
-        join_condition = sql.SQL(' AND ').join(
+        join_condition = sql.SQL(" AND ").join(
             sql.SQL("f.{pk} = s.{pk}").format(pk=pk) for pk in pk_idents
         )
 
@@ -577,27 +657,29 @@ class PostgresLoader(DatabaseLoader):
         """).format(
             final_table=final_table_ident,
             staging_table=staging_table_ident,
-            join_condition=join_condition
+            join_condition=join_condition,
         )
 
         self.cursor.execute(delete_sql)
         deleted_rows = self.cursor.rowcount
         logger.info(f"Deleted {deleted_rows} stale records from '{final_table}'.")
 
-
         # --- Stage 2: Upsert records from staging into final ---
         all_columns = self._get_table_columns(staging_table)
         update_columns = [col for col in all_columns if col not in primary_keys]
 
         if not update_columns:
-            logger.warning(f"No columns to update for table '{final_table}'. All columns are part of the primary key. Skipping UPSERT.")
+            logger.warning(
+                f"No columns to update for table '{final_table}'. All columns are part of the primary key. Skipping UPSERT."
+            )
             self.conn.commit()
             return
 
         all_cols_idents = [sql.Identifier(c) for c in all_columns]
         update_cols_idents = [sql.Identifier(c) for c in update_columns]
-        update_clause = sql.SQL(', ').join(
-            sql.SQL("{col} = EXCLUDED.{col}").format(col=col) for col in update_cols_idents
+        update_clause = sql.SQL(", ").join(
+            sql.SQL("{col} = EXCLUDED.{col}").format(col=col)
+            for col in update_cols_idents
         )
 
         upsert_sql = sql.SQL("""
@@ -607,10 +689,10 @@ class PostgresLoader(DatabaseLoader):
         {update_clause};
         """).format(
             final_table=final_table_ident,
-            all_cols=sql.SQL(', ').join(all_cols_idents),
+            all_cols=sql.SQL(", ").join(all_cols_idents),
             staging_table=staging_table_ident,
-            pk_cols=sql.SQL(', ').join(pk_idents),
-            update_clause=update_clause
+            pk_cols=sql.SQL(", ").join(pk_idents),
+            update_clause=update_clause,
         )
 
         logger.info("Executing UPSERT operation...")
@@ -621,7 +703,16 @@ class PostgresLoader(DatabaseLoader):
         self.conn.commit()
         logger.info(f"Successfully merged data into '{final_table}'.")
 
-    def update_metadata(self, version: str, dataset: str, success: bool, row_count: int, start_time: Optional[float], end_time: Optional[float], error_message: str = None) -> None:
+    def update_metadata(
+        self,
+        version: str,
+        dataset: str,
+        success: bool,
+        row_count: int,
+        start_time: Optional[float],
+        end_time: Optional[float],
+        error_message: str = None,
+    ) -> None:
         """
         Record the outcome of a load operation in the metadata table.
         """
@@ -638,47 +729,65 @@ class PostgresLoader(DatabaseLoader):
         (opentargets_version, dataset_name, rows_loaded, status, error_message, start_time, end_time)
         VALUES (%s, %s, %s, %s, %s, to_timestamp(%s), to_timestamp(%s));
         """
-        self.cursor.execute(insert_sql, (version, dataset, row_count, status, error_message, start_time, end_time))
+        self.cursor.execute(
+            insert_sql,
+            (version, dataset, row_count, status, error_message, start_time, end_time),
+        )
         self.conn.commit()
 
-    def full_refresh_from_staging(self, staging_table: str, final_table: str, primary_keys: list[str]) -> None:
+    def full_refresh_from_staging(
+        self, staging_table: str, final_table: str, primary_keys: list[str]
+    ) -> None:
         """
         Performs a full refresh by recreating the final table from the staging table.
         This approach is transactionally robust.
         """
-        logger.info(f"Performing full refresh from '{staging_table}' to '{final_table}'.")
+        logger.info(
+            f"Performing full refresh from '{staging_table}' to '{final_table}'."
+        )
 
-        final_table_ident = sql.Identifier(*final_table.split('.'))
-        staging_table_ident = sql.Identifier(*staging_table.split('.'))
+        final_table_ident = sql.Identifier(*final_table.split("."))
+        staging_table_ident = sql.Identifier(*staging_table.split("."))
         pk_idents = [sql.Identifier(k) for k in primary_keys]
         pk_constraint_name = sql.Identifier(f"pk_{final_table.replace('.', '_')}")
 
         # Drop the old final table
         logger.info(f"Dropping final table '{final_table}' if it exists.")
-        self.cursor.execute(sql.SQL("DROP TABLE IF EXISTS {final_table} CASCADE;").format(
-            final_table=final_table_ident
-        ))
+        self.cursor.execute(
+            sql.SQL("DROP TABLE IF EXISTS {final_table} CASCADE;").format(
+                final_table=final_table_ident
+            )
+        )
 
         # Recreate the final table from the staging table
         logger.info(f"Creating new final table '{final_table}' from '{staging_table}'.")
-        self.cursor.execute(sql.SQL("CREATE TABLE {final_table} AS TABLE {staging_table};").format(
-            final_table=final_table_ident,
-            staging_table=staging_table_ident
-        ))
+        self.cursor.execute(
+            sql.SQL("CREATE TABLE {final_table} AS TABLE {staging_table};").format(
+                final_table=final_table_ident, staging_table=staging_table_ident
+            )
+        )
 
         # Add the primary key to the new final table
-        logger.info(f"Adding primary key constraint '{pk_constraint_name}' to '{final_table}'.")
-        self.cursor.execute(sql.SQL("ALTER TABLE {final_table} ADD CONSTRAINT {pk_name} PRIMARY KEY ({pk_cols});").format(
-            final_table=final_table_ident,
-            pk_name=pk_constraint_name,
-            pk_cols=sql.SQL(', ').join(pk_idents)
-        ))
+        logger.info(
+            f"Adding primary key constraint '{pk_constraint_name}' to '{final_table}'."
+        )
+        self.cursor.execute(
+            sql.SQL(
+                "ALTER TABLE {final_table} ADD CONSTRAINT {pk_name} PRIMARY KEY ({pk_cols});"
+            ).format(
+                final_table=final_table_ident,
+                pk_name=pk_constraint_name,
+                pk_cols=sql.SQL(", ").join(pk_idents),
+            )
+        )
 
         # Drop the now-obsolete staging table
         logger.info(f"Dropping staging table '{staging_table}'.")
-        self.cursor.execute(sql.SQL("DROP TABLE {staging_table};").format(
-            staging_table=staging_table_ident
-        ))
+        self.cursor.execute(
+            sql.SQL("DROP TABLE {staging_table};").format(
+                staging_table=staging_table_ident
+            )
+        )
 
         self.conn.commit()
         logger.info(f"Successfully completed full refresh for '{final_table}'.")

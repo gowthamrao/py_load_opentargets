@@ -1,6 +1,6 @@
 import pytest
 import hashlib
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, mock_open
 
 # Functions to test
 from py_load_opentargets.data_acquisition import (
@@ -10,6 +10,7 @@ from py_load_opentargets.data_acquisition import (
 
 # --- Fixtures ---
 
+
 @pytest.fixture
 def mock_fsspec_open_for_remote_verify():
     """Mocks fsspec.open for testing _verify_remote_file_checksum."""
@@ -18,7 +19,9 @@ def mock_fsspec_open_for_remote_verify():
     with patch("fsspec.open", m) as mock_spec_open:
         yield mock_spec_open
 
+
 # --- Tests for _verify_remote_file_checksum ---
+
 
 def test_verify_remote_file_checksum_success(mock_fsspec_open_for_remote_verify):
     """Tests that a correct remote checksum passes verification."""
@@ -26,23 +29,34 @@ def test_verify_remote_file_checksum_success(mock_fsspec_open_for_remote_verify)
     expected_checksum = hashlib.sha1(file_content).hexdigest()
 
     # Configure the mock to return the correct content
-    mock_fsspec_open_for_remote_verify.return_value.read.side_effect = [file_content, b'']
+    mock_fsspec_open_for_remote_verify.return_value.read.side_effect = [
+        file_content,
+        b"",
+    ]
 
     # This should not raise an exception
     _verify_remote_file_checksum("gcs://fake/file.txt", expected_checksum)
-    mock_fsspec_open_for_remote_verify.assert_called_once_with("gcs://fake/file.txt", "rb")
+    mock_fsspec_open_for_remote_verify.assert_called_once_with(
+        "gcs://fake/file.txt", "rb"
+    )
+
 
 def test_verify_remote_file_checksum_failure(mock_fsspec_open_for_remote_verify):
     """Tests that an incorrect remote checksum raises a ValueError."""
     file_content = b"this is the wrong content"
     wrong_checksum = "definitelynottherightchecksum"
 
-    mock_fsspec_open_for_remote_verify.return_value.read.side_effect = [file_content, b'']
+    mock_fsspec_open_for_remote_verify.return_value.read.side_effect = [
+        file_content,
+        b"",
+    ]
 
     with pytest.raises(ValueError, match="Checksum mismatch for remote file"):
         _verify_remote_file_checksum("gcs://fake/file.txt", wrong_checksum)
 
+
 # --- Tests for verify_remote_dataset ---
+
 
 @patch("py_load_opentargets.data_acquisition._verify_remote_file_checksum")
 def test_verify_remote_dataset_success(mock_verify_remote):
@@ -61,6 +75,7 @@ def test_verify_remote_dataset_success(mock_verify_remote):
     mock_verify_remote.assert_any_call("gcs://bucket/file1.parquet", "hash1")
     mock_verify_remote.assert_any_call("gcs://bucket/file2.parquet", "hash2")
 
+
 @patch("py_load_opentargets.data_acquisition._verify_remote_file_checksum")
 def test_verify_remote_dataset_raises_on_checksum_mismatch(mock_verify_remote):
     """Tests that an exception from the worker is propagated."""
@@ -73,6 +88,7 @@ def test_verify_remote_dataset_raises_on_checksum_mismatch(mock_verify_remote):
 
     with pytest.raises(ValueError, match="Checksum mismatch"):
         verify_remote_dataset(urls, dataset, manifest, max_workers=1)
+
 
 def test_verify_remote_dataset_raises_on_missing_key():
     """Tests that a KeyError is raised if a checksum is missing from the manifest."""

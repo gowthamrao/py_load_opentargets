@@ -1,4 +1,3 @@
-import pytest
 from py_load_opentargets.config import deep_merge, load_config
 
 def test_deep_merge_simple():

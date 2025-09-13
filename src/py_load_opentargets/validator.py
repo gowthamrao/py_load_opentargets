@@ -3,7 +3,6 @@ import logging
 from typing import Dict, Any
 
 import psycopg
-import fsspec
 
 from .data_acquisition import list_available_versions
 

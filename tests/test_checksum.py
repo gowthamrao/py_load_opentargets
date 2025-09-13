@@ -1,6 +1,6 @@
 import pytest
 import hashlib
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from py_load_opentargets.data_acquisition import get_checksum_manifest, download_dataset, _verify_file_checksum, _download_and_verify_one_file
@@ -62,7 +62,6 @@ def test_get_checksum_manifest_mismatch(mock_fsspec_open):
 
     # Prepare mock data with a deliberate mismatch
     manifest_data = "some data"
-    correct_hash = hashlib.sha1(manifest_data.encode()).hexdigest()
     wrong_hash = "wrong_hash"
     checksum_file_content = f"{wrong_hash}  release_data_integrity"
 

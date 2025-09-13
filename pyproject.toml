@@ -46,6 +46,7 @@ test = [
     "gcsfs>=2023.9.0",
     "sqlalchemy>=2.0.43",
     "psycopg2-binary>=2.9.10",
+    "pytest-cov",
 ]
 
 [tool.poetry.group.docs.dependencies]
